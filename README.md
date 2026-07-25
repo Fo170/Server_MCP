@@ -86,7 +86,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git
+    https://github.com/Fo170/Server_MCP.git@^1.0.0
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
