@@ -1,0 +1,72 @@
+💬 Comment ça marche en pratique
+Tu branches l'Arduino en USB
+Tu upload le firmware .ino via l'IDE Arduino
+Tu lances LM Studio avec le modèle local de ton choix
+Tu dis au LLM : "Allume la LED rouge"
+Le LLM comprend qu'il a un outil led_rouge_on, l'appelle via MCP
+Le serveur Python envoie la commande série à l'Arduino
+L'Arduino allume la LED et répond "OK"
+
+🚀 Extensions possibles
+Tu peux facilement ajouter des capteurs
+
+⚙️ Configuration LM Studio
+Dans LM Studio, onglet Program → Edit mcp.json :
+
+{
+  "mcpServers": {
+    "esp8266-mcp": {
+      "url": "http://192.168.1.XX:80"
+    }
+  }
+}
+
+🔌 Schéma de câblage
+
+NodeMCU ESP8266
+┌─────────────────────────┐
+│ 3V3              GND    │
+│ D0 (GPIO16)      D5 (GPIO14) ──[220Ω]──► LED Rouge (+) ──► GND
+│ D1 (GPIO5)       D6 (GPIO12) ──[220Ω]──► LED Blanche (+) ──► GND
+│ D2 (GPIO4)       D7 (GPIO13) │
+│ D3 (GPIO0)       D8 (GPIO15) │
+│ D4 (GPIO2) LED   RX (GPIO3)  │
+│ 3V3              TX (GPIO1)  │
+│ GND              GND    │
+│ 5V               3V3    │
+│ Vin              RST    │
+│ A0               A0     │
+└─────────────────────────┘
+
+📁 Architecture
+
+ESP8266
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│  ┌─────────────────┐        ┌─────────────────────────────┐ │
+│  │  Serveur Web    │        │   Serveur MCP (JSON-RPC)    │ │
+│  │  Port 80        │        │   Port 8080                 │ │
+│  │                 │        │                             │ │
+│  │  GET /          │        │  POST /mcp                  │ │
+│  │  → page HTML    │        │  → JSON-RPC tools/list      │ │
+│  │                 │        │  → JSON-RPC tools/call      │ │
+│  │  GET /api/temp  │        │  → JSON-RPC ping            │ │
+│  │  → JSON brut    │        │                             │ │
+│  │                 │        │                             │ │
+│  │  [Utilisateur]  │        │  [LM Studio / LLM]          │ │
+│  └─────────────────┘        └─────────────────────────────┘ │
+│                                                             │
+│              Partage des mêmes GPIO / capteurs              │
+└─────────────────────────────────────────────────────────────┘
+
+
+🎯 Pourquoi un port différent ?
+
+| Port                | Usage                            | Raison                                       |
+| ------------------- | -------------------------------- | -------------------------------------------- |
+| **80**              | Interface web utilisateur (HTML) | Navigateur, affichage température, dashboard |
+| **8080** (ou autre) | **Serveur MCP**                  | Protocole JSON-RPC, communication LLM        |
+
+platformio.ini
+
+
