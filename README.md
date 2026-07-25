@@ -74,19 +74,7 @@ ESP8266
 
 ## 📦 Installation
 
-### 1. Structure du projet PlatformIO
-
-```
-mon_projet_mcp/
-├── platformio.ini
-├── lib/
-│   └── Server_MCP/
-│       └── Server_MCP.h          ← Copier ce fichier
-└── src/
-    └── main.cpp                  ← Ton sketch
-```
-
-### 2. Dépendances
+### 1. Dépendance PlatformIO
 
 Ajoute dans `platformio.ini` :
 
@@ -98,15 +86,13 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    bblanchon/ArduinoJson @ ^7.0.0
+    https://github.com/Fo170/Server_MCP.git
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
 ```
 
-### 3. Copier la bibliothèque
-
-Copie le fichier `Server_MCP.h` dans `lib/Server_MCP/Server_MCP.h`.
+La dépendance ArduinoJson 7.x est résolue automatiquement via `library.json`.
 
 ---
 
