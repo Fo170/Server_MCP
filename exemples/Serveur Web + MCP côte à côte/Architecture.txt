@@ -26,8 +26,8 @@ Dans LM Studio, onglet Program → Edit mcp.json :
 NodeMCU ESP8266
 ┌─────────────────────────┐
 │ 3V3              GND    │
-│ D0 (GPIO16)      D5 (GPIO14) ──[220Ω]──► LED Rouge (+) ──► GND
-│ D1 (GPIO5)       D6 (GPIO12) ──[220Ω]──► LED Blanche (+) ──► GND
+│ D0 (GPIO16)      D5 (GPIO14) ──[220Ω]──► (+) LED Rouge (-) ──► GND
+│ D1 (GPIO5)       D6 (GPIO12) ──[220Ω]──► (+) LED Blanche (-) ──► GND
 │ D2 (GPIO4)       D7 (GPIO13) │
 │ D3 (GPIO0)       D8 (GPIO15) │
 │ D4 (GPIO2) LED   RX (GPIO3)  │
