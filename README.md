@@ -101,7 +101,7 @@ La dépendance ArduinoJson 7.x est résolue automatiquement via `library.json`.
 ```cpp
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include "Server_MCP.h"
+#include <Server_MCP.h>
 
 // Créer l'instance du serveur MCP
 Server_MCP mcp("MonServeur", "1.0.0");
