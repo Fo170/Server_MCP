@@ -348,7 +348,7 @@ inline MCPContent Server_MCP::makeResourceContent(const String& uri, const Strin
 }
 
 inline void Server_MCP::_handleRoot() {
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     JsonObject response = doc.to<JsonObject>();
     response["name"] = _serverName;
     response["version"] = _serverVersion;
@@ -357,7 +357,7 @@ inline void Server_MCP::_handleRoot() {
     response["status"] = "online";
     response["url"] = getServerURL();
     response["port"] = _port;
-    JsonObject transports = response.createNestedObject("transports");
+    JsonObject transports = response["transports"].to<JsonObject>();
     transports["http"] = true;
     transports["sse"] = true;
     String output;
@@ -381,7 +381,7 @@ inline void Server_MCP::_handleSSE() {
 }
 
 inline void Server_MCP::_handleNotFound() {
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     JsonObject response = doc.to<JsonObject>();
     response["jsonrpc"] = "2.0";
     response["error"]["code"] = JSONRPC_METHOD_NOT_FOUND;
@@ -392,7 +392,7 @@ inline void Server_MCP::_handleNotFound() {
 }
 
 inline void Server_MCP::_processJSONRPC(const String& body) {
-    StaticJsonDocument<2048> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, body);
     if (error) {
         _sendError(0, JSONRPC_PARSE_ERROR, "Parse error: " + String(error.c_str()));
@@ -405,7 +405,7 @@ inline void Server_MCP::_processJSONRPC(const String& body) {
         return;
     }
     uint32_t id = 0;
-    if (root.containsKey("id")) {
+    if (!root["id"].isNull()) {
         if (root["id"].is<int>()) id = root["id"].as<int>();
         else if (root["id"].is<unsigned int>()) id = root["id"].as<unsigned int>();
     }
@@ -427,35 +427,35 @@ inline void Server_MCP::_processJSONRPC(const String& body) {
 }
 
 inline void Server_MCP::_handleInitialize(const JsonObject& params, uint32_t id) {
-    StaticJsonDocument<1024> resultDoc;
+    JsonDocument resultDoc;
     JsonObject result = resultDoc.to<JsonObject>();
     result["protocolVersion"] = MCP_PROTOCOL_VERSION;
-    JsonObject serverInfo = result.createNestedObject("serverInfo");
+    JsonObject serverInfo = result["serverInfo"].to<JsonObject>();
     serverInfo["name"] = _serverName;
     serverInfo["version"] = _serverVersion;
-    JsonObject capabilities = result.createNestedObject("capabilities");
-    JsonObject toolsCapability = capabilities.createNestedObject("tools");
+    JsonObject capabilities = result["capabilities"].to<JsonObject>();
+    capabilities["tools"].to<JsonObject>();
     if (_resources.size() > 0) {
-        capabilities.createNestedObject("resources");
+        capabilities["resources"].to<JsonObject>();
     }
     _sendResult(id, result);
     _log("Initialisation reussie");
 }
 
 inline void Server_MCP::_handleToolsList(uint32_t id) {
-    StaticJsonDocument<8192> resultDoc;
+    JsonDocument resultDoc;
     JsonObject result = resultDoc.to<JsonObject>();
-    JsonArray tools = result.createNestedArray("tools");
+    JsonArray tools = result["tools"].to<JsonArray>();
     for (const auto& entry : _tools) {
-        JsonObject toolObj = tools.createNestedObject();
+        JsonObject toolObj = tools.add<JsonObject>();
         toolObj["name"] = entry.definition.name;
         toolObj["description"] = entry.definition.description;
-        JsonObject inputSchema = toolObj.createNestedObject("inputSchema");
+        JsonObject inputSchema = toolObj["inputSchema"].to<JsonObject>();
         inputSchema["type"] = "object";
-        JsonObject properties = inputSchema.createNestedObject("properties");
-        JsonArray required = inputSchema.createNestedArray("required");
+        JsonObject properties = inputSchema["properties"].to<JsonObject>();
+        JsonArray required = inputSchema["required"].to<JsonArray>();
         for (const auto& param : entry.definition.params) {
-            JsonObject prop = properties.createNestedObject(param.name);
+            JsonObject prop = properties[param.name].to<JsonObject>();
             prop["type"] = param.type;
             prop["description"] = param.description;
             if (param.required) required.add(param.name);
@@ -465,7 +465,7 @@ inline void Server_MCP::_handleToolsList(uint32_t id) {
 }
 
 inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) {
-    if (!params.containsKey("name")) {
+    if (params["name"].isNull()) {
         _sendError(id, JSONRPC_INVALID_PARAMS, "Missing tool name");
         return;
     }
@@ -475,8 +475,7 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) 
         _sendError(id, JSONRPC_METHOD_NOT_FOUND, "Tool not found: " + toolName);
         return;
     }
-    JsonObject arguments;
-    if (params.containsKey("arguments")) arguments = params["arguments"].as<JsonObject>();
+    JsonObject arguments = params["arguments"].as<JsonObject>();
     String errorMsg;
     if (!_validateParams(arguments, _tools[idx].definition, errorMsg)) {
         _sendError(id, JSONRPC_INVALID_PARAMS, errorMsg);
@@ -484,9 +483,9 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) 
     }
     _log("Appel outil: " + toolName);
     std::vector<MCPContent> contents = _tools[idx].callback(arguments);
-    StaticJsonDocument<4096> finalDoc;
+    JsonDocument finalDoc;
     JsonObject finalResult = finalDoc.to<JsonObject>();
-    JsonArray contentArray = finalResult.createNestedArray("content");
+    JsonArray contentArray = finalResult["content"].to<JsonArray>();
     _serializeContents(contents, contentArray);
     finalResult["isError"] = false;
     _sendResult(id, finalResult);
@@ -494,11 +493,11 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) 
 }
 
 inline void Server_MCP::_handleResourcesList(uint32_t id) {
-    StaticJsonDocument<4096> resultDoc;
+    JsonDocument resultDoc;
     JsonObject result = resultDoc.to<JsonObject>();
-    JsonArray resources = result.createNestedArray("resources");
+    JsonArray resources = result["resources"].to<JsonArray>();
     for (const auto& entry : _resources) {
-        JsonObject resObj = resources.createNestedObject();
+        JsonObject resObj = resources.add<JsonObject>();
         resObj["uri"] = entry.uri;
         resObj["name"] = entry.name;
         resObj["description"] = entry.description;
@@ -508,17 +507,17 @@ inline void Server_MCP::_handleResourcesList(uint32_t id) {
 }
 
 inline void Server_MCP::_handleResourcesRead(const JsonObject& params, uint32_t id) {
-    if (!params.containsKey("uri")) {
+    if (params["uri"].isNull()) {
         _sendError(id, JSONRPC_INVALID_PARAMS, "Missing resource URI");
         return;
     }
     String uri = params["uri"].as<String>();
     for (const auto& entry : _resources) {
         if (entry.uri == uri) {
-            StaticJsonDocument<1024> resultDoc;
+            JsonDocument resultDoc;
             JsonObject result = resultDoc.to<JsonObject>();
-            JsonArray contents = result.createNestedArray("contents");
-            JsonObject content = contents.createNestedObject();
+            JsonArray contents = result["contents"].to<JsonArray>();
+            JsonObject content = contents.add<JsonObject>();
             content["uri"] = uri;
             content["mimeType"] = entry.mimeType;
             content["text"] = "Resource content placeholder";
@@ -530,13 +529,13 @@ inline void Server_MCP::_handleResourcesRead(const JsonObject& params, uint32_t 
 }
 
 inline void Server_MCP::_handlePing(uint32_t id) {
-    StaticJsonDocument<64> resultDoc;
+    JsonDocument resultDoc;
     JsonObject result = resultDoc.to<JsonObject>();
     _sendResult(id, result);
 }
 
 inline void Server_MCP::_sendResult(uint32_t id, const JsonObject& result) {
-    StaticJsonDocument<8192> doc;
+    JsonDocument doc;
     JsonObject response = doc.to<JsonObject>();
     response["jsonrpc"] = "2.0";
     response["id"] = id;
@@ -545,7 +544,7 @@ inline void Server_MCP::_sendResult(uint32_t id, const JsonObject& result) {
 }
 
 inline void Server_MCP::_sendError(uint32_t id, int code, const String& message, const JsonObject* data) {
-    StaticJsonDocument<2048> doc;
+    JsonDocument doc;
     JsonObject response = doc.to<JsonObject>();
     response["jsonrpc"] = "2.0";
     response["id"] = id;
@@ -595,11 +594,11 @@ inline bool Server_MCP::_validateParams(const JsonObject& params,
                                          const MCPTool& tool,
                                          String& errorMsg) {
     for (const auto& param : tool.params) {
-        if (param.required && !params.containsKey(param.name)) {
+        if (param.required && params[param.name].isNull()) {
             errorMsg = "Missing required parameter: " + param.name;
             return false;
         }
-        if (params.containsKey(param.name)) {
+        if (!params[param.name].isNull()) {
             const char* type = param.type.c_str();
             JsonVariant value = params[param.name];
             if (strcmp(type, "string") == 0 && !value.is<const char*>()) {
@@ -621,10 +620,10 @@ inline bool Server_MCP::_validateParams(const JsonObject& params,
 
 inline void Server_MCP::_buildToolSchema(const MCPTool& tool, JsonObject& schema) {
     schema["type"] = "object";
-    JsonObject properties = schema.createNestedObject("properties");
-    JsonArray required = schema.createNestedArray("required");
+    JsonObject properties = schema["properties"].to<JsonObject>();
+    JsonArray required = schema["required"].to<JsonArray>();
     for (const auto& param : tool.params) {
-        JsonObject prop = properties.createNestedObject(param.name);
+        JsonObject prop = properties[param.name].to<JsonObject>();
         prop["type"] = param.type;
         prop["description"] = param.description;
         if (param.required) required.add(param.name);
@@ -633,7 +632,7 @@ inline void Server_MCP::_buildToolSchema(const MCPTool& tool, JsonObject& schema
 
 inline void Server_MCP::_serializeContents(const std::vector<MCPContent>& contents, JsonArray& array) {
     for (const auto& content : contents) {
-        JsonObject obj = array.createNestedObject();
+        JsonObject obj = array.add<JsonObject>();
         obj["type"] = _getContentTypeString(content.type);
         switch (content.type) {
             case MCP_CONTENT_TEXT:
@@ -644,7 +643,7 @@ inline void Server_MCP::_serializeContents(const std::vector<MCPContent>& conten
                 obj["data"] = content.data;
                 break;
             case MCP_CONTENT_RESOURCE:
-                obj["resource"] = obj.createNestedObject("resource");
+                obj["resource"] = obj["resource"].to<JsonObject>();
                 obj["resource"]["uri"] = content.uri;
                 obj["resource"]["mimeType"] = content.mimeType;
                 obj["resource"]["text"] = content.text;

@@ -4,7 +4,7 @@ Bibliothèque C++ pour ESP8266 implémentant le **Model Context Protocol (MCP)**
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.1.0  
+> **Version** : 1.1.1  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
@@ -559,6 +559,9 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.1.1
+- Migration du code vers l'**API ArduinoJson v7** (`JsonDocument`, `add<JsonObject>()`, `to<JsonObject>()`) — suppression des appels dépréciés v6 (`StaticJsonDocument`, `createNestedObject()`, `containsKey()`)
 
 ### v1.1.0
 - Compatibilité **ESP32** (classe serveur `WebServer` du core) et **ESP8266** (`ESP8266WebServer`)
