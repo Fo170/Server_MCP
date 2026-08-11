@@ -4,8 +4,8 @@ Bibliothèque C++ pour ESP8266 implémentant le **Model Context Protocol (MCP)**
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.0.0  
-> **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) sous PlatformIO / Arduino Framework
+> **Version** : 1.1.0  
+> **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
 
@@ -100,9 +100,12 @@ La dépendance ArduinoJson 7.x est résolue automatiquement via `library.json`.
 
 ```cpp
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
 #include <Server_MCP.h>
+```
 
+La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServer` sur ESP32, `ESP8266WebServer` sur ESP8266). Pour une plateforme non reconnue, définir `SERVER_MCP_WEBSERVER` (et inclure le WiFi) avant le `#include`.
+
+```cpp
 // Créer l'instance du serveur MCP
 Server_MCP mcp("MonServeur", "1.0.0");
 
@@ -290,13 +293,17 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 
 ```cpp
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include "Server_MCP.h"
+#if defined(ESP32)
+  #include <WiFi.h>
+  #define PIN_LED 2          // GPIO2 : LED intégrée de la plupart des dev boards ESP32
+#else
+  #include <ESP8266WiFi.h>
+  #define PIN_LED D5         // GPIO14
+#endif
+#include <Server_MCP.h>
 
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
-
-const int PIN_LED = D5;
 
 Server_MCP mcp("ESP-LED", "1.0.0");
 
@@ -373,9 +380,17 @@ void setup() {
 ### Exemple 3 : Serveur Web + MCP côte à côte
 
 ```cpp
-#include <ESP8266WebServer.h>
+#if defined(ESP32)
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #define SERVER_WEB WebServer
+#else
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+  #define SERVER_WEB ESP8266WebServer
+#endif
 
-ESP8266WebServer webServer(80);    // Interface utilisateur
+SERVER_WEB webServer(80);    // Interface utilisateur
 Server_MCP mcpServer("ESP-MCP", "1.0.0");  // Port 8080 par défaut
 
 void handleWebRoot() {
@@ -544,6 +559,11 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.1.0
+- Compatibilité **ESP32** (classe serveur `WebServer` du core) et **ESP8266** (`ESP8266WebServer`)
+- Sélection automatique de la plateforme ; macro `SERVER_MCP_WEBSERVER` pour toute autre carte
+- Exemples : environnement `esp32dev` ajouté aux 4 projets
 
 ### v1.0.0
 - Implémentation complète du protocole MCP (JSON-RPC 2.0)

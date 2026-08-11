@@ -1,11 +1,15 @@
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
+#if defined(ESP32)
+  #include <WiFi.h>
+  #define PIN_LED 2          // GPIO2 : LED intégrée de la plupart des dev boards ESP32
+#else
+  #include <ESP8266WiFi.h>
+  #define PIN_LED D5         // GPIO14
+#endif
 #include <Server_MCP.h>
 
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
-
-const int PIN_LED = D5;
 
 Server_MCP mcp("ESP-LED", "1.0.0");
 

@@ -1,11 +1,25 @@
 // ============================================
-// main.cpp - ESP8266 avec Web (port 80) + MCP (port 8080)
+// main.cpp - Web (port 80) + MCP (port 8080) sur ESP8266/ESP32
 // ============================================
 
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
+#if defined(ESP32)
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #define SERVER_WEB WebServer
+  #define PIN_LED_ROUGE 14      // GPIO14
+  #define PIN_LED_BLANCHE 12    // GPIO12
+  #ifndef LED_BUILTIN
+    #define LED_BUILTIN 2       // GPIO2 : LED intégrée de la plupart des dev boards ESP32
+  #endif
+#else
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+  #define SERVER_WEB ESP8266WebServer
+  #define PIN_LED_ROUGE D5      // GPIO14
+  #define PIN_LED_BLANCHE D6    // GPIO12
+#endif
 #include <Server_MCP.h>
 
 // ═══════════════════════════════════════════
@@ -19,8 +33,6 @@ const char* WIFI_PASSWORD = "TON_MOT_DE_PASSE_WIFI";
 // BROCHES
 // ═══════════════════════════════════════════
 
-const int PIN_LED_ROUGE = D5;     // GPIO14
-const int PIN_LED_BLANCHE = D6;   // GPIO12
 const int PIN_LED_BUILTIN = LED_BUILTIN;
 
 // ═══════════════════════════════════════════
@@ -35,8 +47,8 @@ bool chauffageActif = false;
 // SERVEURS
 // ═══════════════════════════════════════════
 
-ESP8266WebServer webServer(80);    // Interface web utilisateur
-Server_MCP mcpServer("ESP8266-MCP", "1.0.0");  // Serveur MCP sur port 8080
+SERVER_WEB webServer(80);    // Interface web utilisateur
+Server_MCP mcpServer("ESP-MCP", "1.0.0");  // Serveur MCP sur port 8080
 
 // ═══════════════════════════════════════════
 // FONCTIONS WEB (Port 80)

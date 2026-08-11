@@ -1,6 +1,6 @@
 {
   "name": "Server_MCP",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP (Model Context Protocol) server for ESP8266 — JSON-RPC 2.0 over HTTP",
   "keywords": ["mcp", "model-context-protocol", "esp8266", "llm", "arduino"],
   "repository": {
@@ -9,13 +9,17 @@
   },
   "authors": [
     {
-      "name": "Olivier Fournet",
+      "name": "Olivier FOURNET",
+      "email": "olivier.fournet@free.fr",
       "url": "https://github.com/Fo170"
     }
   ],
-  "license": "GPL-3.0",
+  "license": "GPL-3.0-only",
   "frameworks": ["arduino"],
-  "platforms": ["espressif8266"],
+  "platforms": ["espressif8266", "espressif32"],
+  "build": {
+    "srcFilter": ["-<exemples>"]
+  },
   "dependencies": {
     "bblanchon/ArduinoJson": "^7.0.0"
   }

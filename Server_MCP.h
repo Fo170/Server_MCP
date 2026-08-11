@@ -1,18 +1,35 @@
 // ============================================================================
 // Server_MCP.h
-// Bibliotheque C++ MCP pour ESP8266 — Port configurable
+// Bibliotheque C++ MCP pour ESP8266/ESP32 — Port configurable
 // ============================================================================
 
 #ifndef SERVER_MCP_H
 #define SERVER_MCP_H
 
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <vector>
 #include <functional>
 #include <map>
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sélection de la plateforme (ESP8266 / ESP32 / autre)
+// Pour une plateforme non reconnue, définir SERVER_MCP_WEBSERVER (et inclure
+// le WiFi) avant le #include de ce fichier.
+// ────────────────────────────────────────────────────────────────────────────
+#if defined(ESP32)
+  #include <WiFi.h>
+  #include <WebServer.h>
+  #define SERVER_MCP_WEBSERVER WebServer
+#elif defined(ESP8266)
+  #include <ESP8266WiFi.h>
+  #include <ESP8266WebServer.h>
+  #define SERVER_MCP_WEBSERVER ESP8266WebServer
+#else
+  #ifndef SERVER_MCP_WEBSERVER
+    #error "Server_MCP: plateforme non supportee. Definir SERVER_MCP_WEBSERVER (et inclure le WiFi) avant le #include."
+  #endif
+#endif
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
 
@@ -105,7 +122,7 @@ private:
     bool _debugEnabled;
     HardwareSerial* _debugSerial;
 
-    ESP8266WebServer* _server;
+    SERVER_MCP_WEBSERVER* _server;
     uint16_t _port;
 
     struct ToolEntry {
@@ -260,7 +277,7 @@ inline bool Server_MCP::begin(uint16_t port) {
         return true;
     }
     _port = port;
-    _server = new ESP8266WebServer(port);
+    _server = new SERVER_MCP_WEBSERVER(port);
     if (!_server) {
         _logError("Echec allocation serveur HTTP");
         return false;
