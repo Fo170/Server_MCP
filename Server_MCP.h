@@ -40,6 +40,15 @@
 #define JSONRPC_INTERNAL_ERROR   (-32603)
 #define JSONRPC_SERVER_ERROR     (-32000)
 
+// ⚠️ PATCH LOCAL (28/08/2026) : contrôle de flux "style TCP" — fenêtre de CANAUX
+// glissante. Trop de requêtes en rafale empile des appels bloquants (Domoticz
+// ~3 s) dans loop_Core_1 et étrangle le polling Telegram/web. Au-delà de
+// MCP_FLOW_MAX requêtes par fenêtre MCP_FLOW_WINDOW_MS, la requête est REJETÉE
+// en HTTP 429 (protocole MCP standard de rate-limiting). Valeurs surchargées à
+// l'exécution via setFlowControl() (appelée depuis INIT_MCP() du projet).
+#define MCP_FLOW_MAX        8          // canaux max par fenêtre (défaut strict)
+#define MCP_FLOW_WINDOW_MS  30000UL    // fenêtre glissante (défaut 30 s)
+
 enum MCPContentType {
     MCP_CONTENT_TEXT,
     MCP_CONTENT_IMAGE,
@@ -76,8 +85,8 @@ using MCPToolCallback = std::function<std::vector<MCPContent>(const JsonObject& 
 
 class Server_MCP {
 public:
-    Server_MCP(const String& serverName = "ESP8266-MCP",
-               const String& serverVersion = "1.0.0",
+    Server_MCP(const String& serverName = "Server-MCP",
+               const String& serverVersion = "1.1.2",
                uint16_t maxTools = 16,
                uint16_t maxResources = 8);
     ~Server_MCP();
@@ -111,6 +120,13 @@ public:
     uint16_t getPort() const;
     String getServerURL() const;
 
+    // ⚠️ PATCH LOCAL : contrôle de flux (fenêtre de canaux glissante).
+    void setFlowControl(uint16_t maxRequests, uint32_t windowMs);
+    uint16_t flowMax() const;
+    uint16_t flowUsed() const;
+    uint32_t flowWindowMs() const;
+    String flowEtat() const;
+
     static MCPContent makeTextContent(const String& text);
     static MCPContent makeImageContent(const String& base64Data, const String& mimeType = "image/png");
     static MCPContent makeResourceContent(const String& uri, const String& text, const String& mimeType = "text/plain");
@@ -143,6 +159,13 @@ private:
 
     uint32_t _requestId;
 
+    // ⚠️ PATCH LOCAL : contrôle de flux (fenêtre de canaux glissante).
+    uint16_t _flowMax;
+    uint32_t _flowWindowMs;
+    uint32_t _flowWinStart;
+    uint16_t _flowUsed;
+    uint8_t  _flowEtatPrec;   // dernier état annoncé (pour log des transitions)
+
     void _handleRoot();
     void _handleMCP();
     void _handleSSE();
@@ -158,7 +181,9 @@ private:
 
     void _sendResult(uint32_t id, const JsonObject& result);
     void _sendError(uint32_t id, int code, const String& message, const JsonObject* data = nullptr);
-    void _sendJSONResponse(const JsonObject& response);
+    void _sendError429(uint32_t id, int code, const String& message);
+    void _sendJSONResponse(const JsonObject& response, uint16_t statusCode = 200);
+    bool _flowConsume();   // PATCH LOCAL : consomme un canal (rejet si fenêtre pleine)
 
     void _log(const String& msg);
     void _logError(const String& msg);
@@ -187,6 +212,11 @@ inline Server_MCP::Server_MCP(const String& serverName,
     , _maxTools(maxTools)
     , _maxResources(maxResources)
     , _requestId(0)
+    , _flowMax(MCP_FLOW_MAX)
+    , _flowWindowMs(MCP_FLOW_WINDOW_MS)
+    , _flowWinStart(0)
+    , _flowUsed(0)
+    , _flowEtatPrec(0)
 {
     _tools.reserve(maxTools);
     _resources.reserve(maxResources);
@@ -323,6 +353,67 @@ inline String Server_MCP::getServerURL() const {
     return "http://" + WiFi.localIP().toString() + ":" + String(_port);
 }
 
+// ═════════════════════════════════════════════════════════════════
+// PATCH LOCAL : contrôle de flux (fenêtre de canaux glissante)
+// ═════════════════════════════════════════════════════════════════
+inline void Server_MCP::setFlowControl(uint16_t maxRequests, uint32_t windowMs) {
+    _flowMax = maxRequests;
+    _flowWindowMs = windowMs;
+    _flowWinStart = 0;
+    _flowUsed = 0;
+    _flowEtatPrec = 0;
+    _log("Controle de flux: max " + String(_flowMax) + " requetes / " +
+         String(_flowWindowMs / 1000) + " s");
+}
+
+inline uint16_t Server_MCP::flowMax() const      { return _flowMax; }
+
+// canaux utilisés EFFECTIFS pour l'affichage (0 si la fenêtre est expirée —
+// le reset est paresseux côté requête, mais le monitoring doit être à jour).
+inline uint16_t Server_MCP::flowUsed() const {
+    uint32_t now = millis();
+    if (_flowWindowMs == 0 || (now - _flowWinStart >= _flowWindowMs) || now < _flowWinStart)
+        return 0;
+    return _flowUsed;
+}
+
+inline uint32_t Server_MCP::flowWindowMs() const { return _flowWindowMs; }
+
+// État annoncé (monitoring web/série) : libre / pris en compte / ralentir / sature.
+inline String Server_MCP::flowEtat() const {
+    if (_flowMax == 0) return "libre";
+    uint32_t now = millis();
+    uint16_t used = ((_flowWindowMs == 0) || (now - _flowWinStart >= _flowWindowMs) ||
+                     (now < _flowWinStart)) ? 0 : _flowUsed;
+    float r = (float)used / (float)_flowMax;
+    if (r < 0.5f)       return "libre";
+    else if (r < 0.8f)  return "pris en compte";
+    else if (r < 1.0f)  return "ralentir";
+    return "sature";
+}
+
+// Consomme un canal de la fenêtre glissante. Renvoie false si la fenêtre est
+// pleine (trop de requêtes) — la requête est alors rejetée en HTTP 429.
+inline bool Server_MCP::_flowConsume() {
+    uint32_t now = millis();
+    if (_flowWindowMs == 0 || (now - _flowWinStart >= _flowWindowMs) || now < _flowWinStart) {
+        _flowWinStart = now;   // nouvelle fenêtre (ou wrap de millis())
+        _flowUsed = 0;
+    }
+    if (_flowUsed >= _flowMax) return false;
+    _flowUsed++;
+    // Log des TRANSITIONS d'état (libre=1, pris en compte=2, ralentir=3, sature=4)
+    uint8_t etat = (_flowMax == 0) ? 1
+                 : ((float)_flowUsed / _flowMax < 0.5f) ? 1
+                 : ((float)_flowUsed / _flowMax < 0.8f) ? 2
+                 : ((float)_flowUsed / _flowMax < 1.0f) ? 3 : 4;
+    if (etat != _flowEtatPrec) {
+        _flowEtatPrec = etat;
+        _log("Flux MCP: " + flowEtat() + " (" + String(_flowUsed) + "/" + String(_flowMax) + ")");
+    }
+    return true;
+}
+
 inline MCPContent Server_MCP::makeTextContent(const String& text) {
     MCPContent c;
     c.type = MCP_CONTENT_TEXT;
@@ -404,11 +495,33 @@ inline void Server_MCP::_processJSONRPC(const String& body) {
         _sendError(0, JSONRPC_INVALID_REQUEST, "Invalid JSON-RPC version");
         return;
     }
-    uint32_t id = 0;
-    if (!root["id"].isNull()) {
-        if (root["id"].is<int>()) id = root["id"].as<int>();
-        else if (root["id"].is<unsigned int>()) id = root["id"].as<unsigned int>();
+
+    // JSON-RPC notification (message SANS "id") : le client ne doit recevoir
+    // AUCUNE réponse. Répondre HTTP 202 Accepted avec un corps vide, comme le
+    // veut la spec MCP Streamable HTTP (sinon les clients comme LM Studio /
+    // SDK officiel lèvent "Received an unexpected response to a notification").
+    if (root["id"].isNull()) {
+        _server->send(202, "application/json", "");
+        return;
     }
+
+    uint32_t id = 0;
+    if (root["id"].is<int>()) id = root["id"].as<int>();
+    else if (root["id"].is<unsigned int>()) id = root["id"].as<unsigned int>();
+
+    // ⚠️ PATCH LOCAL : contrôle de flux — rejet immédiat (HTTP 429) si la fenêtre
+    // de canaux est pleine (trop de requêtes en rafale), AVANT tout traitement
+    // bloquant (appels Domoticz ~3 s) qui étranglerait loop_Core_1.
+    if (!_flowConsume()) {
+        _sendError429(id, JSONRPC_SERVER_ERROR,
+            "Trop de demandes MCP — canaux " + String(_flowUsed) + "/" + String(_flowMax) +
+            " (sature). Veuillez espacer les requetes (fenetre " +
+            String(_flowWindowMs / 1000) + " s).");
+        _logError("Flux MCP sature (" + String(_flowMax) + "/" + String(_flowMax) +
+                  ") — rejet HTTP 429");
+        return;
+    }
+
     const char* method = root["method"];
     if (!method) {
         _sendError(id, JSONRPC_INVALID_REQUEST, "Missing method");
@@ -555,11 +668,40 @@ inline void Server_MCP::_sendError(uint32_t id, int code, const String& message,
     _sendJSONResponse(response);
 }
 
-inline void Server_MCP::_sendJSONResponse(const JsonObject& response) {
+// ⚠️ PATCH LOCAL : rejet de rate-limiting en HTTP 429 (Too Many Requests) —
+// code standard MCP pour le contrôle de flux ; enveloppe JSON-RPC erreur.
+inline void Server_MCP::_sendError429(uint32_t id, int code, const String& message) {
+    JsonDocument doc;
+    JsonObject response = doc.to<JsonObject>();
+    response["jsonrpc"] = "2.0";
+    response["id"] = id;
+    JsonObject error = response["error"].to<JsonObject>();
+    error["code"] = code;
+    error["message"] = message;
+    _sendJSONResponse(response, 429);
+}
+
+inline void Server_MCP::_sendJSONResponse(const JsonObject& response, uint16_t statusCode) {
     String output;
     serializeJson(response, output);
     _log("Reponse: " + output.substring(0, 256));
-    _server->send(200, "application/json", output);
+    // ⚠️ PATCH LOCAL : WebServer::send(200, type, content) écrit TOUT le corps
+    // en UN SEUL write() → tronqué au-delà du buffer TCP ESP32
+    // (CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760 o) : tools/list (~8 Ko) était coupé
+    // à 5760 o et le client MCP (LM Studio) ne voyait pas les outils.
+    // setContentLength() fixe le Content-Length puis on streame par CHUNKS ≤ 1024 o.
+    // statusCode paramétrable (200 par défaut, 429 pour le rate-limiting).
+    const size_t CHUNK = 1024;
+    _server->setContentLength(output.length());
+    _server->send(statusCode, "application/json");   // headers seuls (Content-Length total)
+    const char* p = output.c_str();
+    size_t len = output.length();
+    while (len > 0) {
+        size_t n = (len > CHUNK) ? CHUNK : len;
+        _server->sendContent(p, n);
+        p += n;
+        len -= n;
+    }
 }
 
 inline void Server_MCP::_log(const String& msg) {

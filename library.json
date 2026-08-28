@@ -1,8 +1,14 @@
 {
   "name": "Server_MCP",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "MCP (Model Context Protocol) server for ESP8266 — JSON-RPC 2.0 over HTTP",
-  "keywords": ["mcp", "model-context-protocol", "esp8266", "llm", "arduino"],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "esp8266",
+    "llm",
+    "arduino"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/Fo170/Server_MCP.git"
@@ -15,10 +21,17 @@
     }
   ],
   "license": "GPL-3.0-only",
-  "frameworks": ["arduino"],
-  "platforms": ["espressif8266", "espressif32"],
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "espressif8266",
+    "espressif32"
+  ],
   "build": {
-    "srcFilter": ["-<exemples>"]
+    "srcFilter": [
+      "-<exemples>"
+    ]
   },
   "dependencies": {
     "bblanchon/ArduinoJson": "^7.0.0"

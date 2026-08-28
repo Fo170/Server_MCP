@@ -4,8 +4,18 @@ Bibliothèque C++ pour ESP8266 implémentant le **Model Context Protocol (MCP)**
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.1.1  
+> **Version** : 1.1.2  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
+
+---
+
+## 🆕 Nouveautés v1.1.2
+
+3 corrections intégrées dans cette version :
+
+1. **Notifications JSON-RPC → HTTP 202** — `_processJSONRPC()` répond **HTTP 202 corps vide** aux notifications (message SANS `id`), comme le veut la spec MCP Streamable HTTP. Sans cela, LM Studio / SDK officiel MCP lève *« Received an unexpected response to a notification »* et n'affiche pas les outils.
+2. **Envoi des réponses par chunks ≤ 1024 o** — `_sendJSONResponse()` fixe le `Content-Length` puis streame par `sendContent()`. `WebServer::send(200, type, content)` écrivait tout le corps en un seul `write()` → tronqué au-delà du buffer TCP ESP32 (`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` = 5760 o) ; `tools/list` (~8 Ko) était coupé → outils invisibles pour LM Studio.
+3. **Contrôle de flux « style TCP »** — fenêtre de **canaux glissante** : `setFlowControl(maxRequests, windowMs)` (défaut `MCP_FLOW_MAX` = 8 / `MCP_FLOW_WINDOW_MS` = 30 s). Au-delà du max, la requête est **rejetée immédiatement en HTTP 429** (protocole MCP standard de rate-limiting) avec une erreur JSON-RPC « Trop de demandes MCP — canaux X/Y (saturé) ». État exposé via `flowMax()` / `flowUsed()` / `flowWindowMs()` / `flowEtat()` (états `libre`, `pris en compte`, `ralentir`, `saturé`) pour le monitoring web/série.
 
 ---
 
@@ -86,7 +96,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git@^1.0.0
+    https://github.com/Fo170/Server_MCP.git@^1.1.2
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
@@ -107,7 +117,7 @@ La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServ
 
 ```cpp
 // Créer l'instance du serveur MCP
-Server_MCP mcp("MonServeur", "1.0.0");
+Server_MCP mcp("MonServeur", "1.1.2");
 
 // Callback pour un outil
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
@@ -142,16 +152,16 @@ void loop() {
 ### Constructeur
 
 ```cpp
-Server_MCP(const String& serverName = "ESP8266-MCP",
-           const String& serverVersion = "1.0.0",
+Server_MCP(const String& serverName = "Server-MCP",
+           const String& serverVersion = "1.1.2",
            uint16_t maxTools = 16,
            uint16_t maxResources = 8);
 ```
 
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
-| `serverName` | `String` | `"ESP8266-MCP"` | Nom du serveur affiché au client |
-| `serverVersion` | `String` | `"1.0.0"` | Version du serveur |
+| `serverName` | `String` | `"Server-MCP"` | Nom du serveur affiché au client |
+| `serverVersion` | `String` | `"1.1.2"` | Version du serveur |
 | `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils |
 | `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources |
 
@@ -305,7 +315,7 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.0.0");
+Server_MCP mcp("ESP-LED", "1.1.2");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -391,7 +401,7 @@ void setup() {
 #endif
 
 SERVER_WEB webServer(80);    // Interface utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.0.0");  // Port 8080 par défaut
+Server_MCP mcpServer("ESP-MCP", "1.1.2");  // Port 8080 par défaut
 
 void handleWebRoot() {
     webServer.send(200, "text/html", "<h1>Dashboard ESP8266</h1>");
@@ -559,6 +569,11 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.1.2
+- **Notifications JSON-RPC** : réponse **HTTP 202 corps vide** aux messages sans `id` (conforme spec MCP Streamable HTTP) — corrige *« Received an unexpected response to a notification »* sous LM Studio / SDK officiel
+- **Envoi chunké des réponses** (`_sendJSONResponse`) : `setContentLength()` + `sendContent()` par blocs ≤ 1024 o — corrige la troncature de `tools/list` (~8 Ko) au-delà du buffer TCP ESP32 (5760 o)
+- **Contrôle de flux** : fenêtre de canaux glissante `setFlowControl(maxRequests, windowMs)` (défaut 8 / 30 s), rejet en **HTTP 429** au-delà du max ; état exposé via `flowMax()` / `flowUsed()` / `flowWindowMs()` / `flowEtat()`
 
 ### v1.1.1
 - Migration du code vers l'**API ArduinoJson v7** (`JsonDocument`, `add<JsonObject>()`, `to<JsonObject>()`) — suppression des appels dépréciés v6 (`StaticJsonDocument`, `createNestedObject()`, `containsKey()`)

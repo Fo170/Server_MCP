@@ -48,7 +48,7 @@ bool chauffageActif = false;
 // ═══════════════════════════════════════════
 
 SERVER_WEB webServer(80);    // Interface web utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.0.0");  // Serveur MCP sur port 8080
+Server_MCP mcpServer("ESP-MCP", "1.1.2");  // Serveur MCP sur port 8080
 
 // ═══════════════════════════════════════════
 // FONCTIONS WEB (Port 80)
@@ -108,7 +108,7 @@ void handleWebRoot() {
 }
 
 void handleApiTemp() {
-    StaticJsonDocument<256> doc;
+    JsonDocument doc;
     doc["temperature"] = temperature;
     doc["humidite"] = humidite;
     doc["unite"] = "Celsius";
@@ -187,7 +187,7 @@ std::vector<MCPContent> mcp_getTemperature(const JsonObject& params) {
 }
 
 std::vector<MCPContent> mcp_setChauffage(const JsonObject& params) {
-    if (!params.containsKey("actif")) {
+    if (params["actif"].isNull()) {
         return { Server_MCP::makeTextContent("❌ Paramètre 'actif' requis (true/false)") };
     }
     chauffageActif = params["actif"].as<bool>();
@@ -196,9 +196,9 @@ std::vector<MCPContent> mcp_setChauffage(const JsonObject& params) {
 }
 
 std::vector<MCPContent> mcp_clignoter(const JsonObject& params) {
-    String couleur = params.containsKey("couleur") ? params["couleur"].as<String>() : "rouge";
-    int duree = params.containsKey("duree_ms") ? params["duree_ms"].as<int>() : 500;
-    int repetitions = params.containsKey("repetitions") ? params["repetitions"].as<int>() : 3;
+    String couleur = params["couleur"].isNull() ? "rouge" : params["couleur"].as<String>();
+    int duree = params["duree_ms"].isNull() ? 500 : params["duree_ms"].as<int>();
+    int repetitions = params["repetitions"].isNull() ? 3 : params["repetitions"].as<int>();
 
     int pin = PIN_LED_ROUGE;
     if (couleur == "blanche") pin = PIN_LED_BLANCHE;
