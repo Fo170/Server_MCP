@@ -8,7 +8,7 @@
 #endif
 #include <Server_MCP.h>
 
-Server_MCP mcp("MonServeur", "1.1.2");
+Server_MCP mcp("MonServeur", "1.2.0");
 
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -22,7 +22,7 @@ void setup() {
 
     mcp.setSerialDebug(true, &Serial);
     mcp.registerTool("led_on", "Allume la LED", allumerLED);
-    mcp.begin(8080);
+    mcp.begin(8081);
 }
 
 void loop() {

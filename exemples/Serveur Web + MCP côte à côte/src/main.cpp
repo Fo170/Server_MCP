@@ -1,5 +1,5 @@
 // ============================================
-// main.cpp - Web (port 80) + MCP (port 8080) sur ESP8266/ESP32
+// main.cpp - Web (port 80) + MCP (port 8081) sur ESP8266/ESP32
 // ============================================
 
 #include <Arduino.h>
@@ -48,7 +48,7 @@ bool chauffageActif = false;
 // ═══════════════════════════════════════════
 
 SERVER_WEB webServer(80);    // Interface web utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.1.2");  // Serveur MCP sur port 8080
+Server_MCP mcpServer("ESP-MCP", "1.2.0");  // Serveur MCP sur port 8081
 
 // ═══════════════════════════════════════════
 // FONCTIONS WEB (Port 80)
@@ -100,7 +100,7 @@ void handleWebRoot() {
         <br><br>
         <button class="refresh" onclick="location.reload()">🔄 Rafraîchir</button>
     </div>
-    <p style="color:#666; font-size:12px;">Serveur MCP actif sur le port 8080</p>
+    <p style="color:#666; font-size:12px;">Serveur MCP actif sur le port 8081</p>
 </body>
 </html>
 )rawliteral";
@@ -139,7 +139,7 @@ void handleApiLedBlancheOff() {
 }
 
 // ═══════════════════════════════════════════
-// CALLBACKS MCP (Port 8080)
+// CALLBACKS MCP (Port 8081)
 // ═══════════════════════════════════════════
 
 std::vector<MCPContent> mcp_ledRougeOn(const JsonObject& params) {
@@ -244,7 +244,7 @@ void setup() {
     delay(1000);
 
     Serial.println("\n\n╔══════════════════════════════════════════════╗");
-    Serial.println("║     ESP8266 - Web (80) + MCP (8080)          ║");
+    Serial.println("║     ESP8266 - Web (80) + MCP (8081)          ║");
     Serial.println("╚══════════════════════════════════════════════╝");
 
     // GPIO
@@ -290,7 +290,7 @@ void setup() {
     Serial.println("🌐 Serveur Web démarré sur le port 80");
 
     // ═══════════════════════════════════════
-    // CONFIGURATION SERVEUR MCP (Port 8080)
+    // CONFIGURATION SERVEUR MCP (Port 8081)
     // ═══════════════════════════════════════
     mcpServer.setSerialDebug(true, &Serial);
 
@@ -310,18 +310,18 @@ void setup() {
     mcpServer.addToolParam("duree_ms", "Durée en millisecondes", "integer", false);
     mcpServer.addToolParam("repetitions", "Nombre de cycles", "integer", false);
 
-    mcpServer.begin(8080);  // ← Port 8080 explicite !
-    Serial.println("🚀 Serveur MCP démarré sur le port 8080");
+    mcpServer.begin(8081);  // ← Port 8081 explicite !
+    Serial.println("🚀 Serveur MCP démarré sur le port 8081");
 
     Serial.println("\n═══════════════════════════════════════════════");
     Serial.println("📱 Interface Web: http://" + WiFi.localIP().toString());
-    Serial.println("🤖 Serveur MCP:   http://" + WiFi.localIP().toString() + ":8080");
+    Serial.println("🤖 Serveur MCP:   http://" + WiFi.localIP().toString() + ":8081");
     Serial.println("═══════════════════════════════════════════════");
 }
 
 void loop() {
     webServer.handleClient();    // Port 80 - Interface web
-    mcpServer.handleClient();    // Port 8080 - Protocole MCP
+    mcpServer.handleClient();    // Port 8081 - Protocole MCP
     updateSensorData();          // Mise à jour capteurs
 
     // Heartbeat LED

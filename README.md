@@ -4,18 +4,42 @@ Bibliothèque C++ pour ESP8266 implémentant le **Model Context Protocol (MCP)**
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.1.2  
+> **Version** : 1.2.0  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
 
-## 🆕 Nouveautés v1.1.2
+## 🔧 Modifications locales — COPIE VENDORISÉE (coulomètre)
 
-3 corrections intégrées dans cette version :
+> ⚠️ **Cette copie (`lib/mcp/`) est celle UTILISÉE par le firmware du coulomètre** (WeMos Mini — `ESP8266WebServer`). Elle remplace la dépendance git `https://github.com/Fo170/Server_MCP.git` de `platformio.ini`. Elle ne doit **PAS** être remplacée par le repo GitHub d'origine (qui n'a pas les patches ci-dessous) et **PAS** être effacée : un `rm -rf .pio/libdeps/d1_mini` réinstallerait la version git NON patchée → MCP cassé (réponses vides).
+
+### Patches locaux appliqués
+
+| Date | Patch | Effet |
+|------|-------|-------|
+| **28/08/2026** | Contrôle de flux « style TCP » (fenêtre glissante, HTTP 429) | Évite l'engorgement quand un LLM rafale des requêtes |
+| **28/08/2026** | Notifications JSON-RPC → HTTP 202 corps vide | Conforme spec MCP Streamable HTTP (LM Studio / SDK officiel) |
+| **28/08/2026** | Envoi des réponses par chunks ≤ 1024 o (`setContentLength` + `sendContent`) | `tools/list` (~8 Ko) n'est plus tronqué au buffer TCP |
+| **29/08/2026** | `_handleToolsCall()` : réponse construite en **UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi | Corrige l'**OOM des réponses > ~600 o** sur heap serré (~6-7 Ko) : `get_log_1h` / `get_log_h` du coulomètre renvoyaient **vide** |
+| **29/08/2026** | `_handleToolsList()` : même pattern mono-document | Corrige `tools/list` (~2 Ko) qui saturait en OOM |
+| **29/08/2026** | **Port par défaut 8081 → 8081** (`begin(port = 8081)` + `_port(8081)`) | Cohérence avec l'écosystème du coulomètre où **8081 = Domoticz** (`DOMOTICZ_PORT`) → pas d'ambiguïté si le port n'est pas passé explicitement |
+
+**Pourquoi le patch 29/08 ?** L'ancien chemin construisait `finalDoc` + un 2ᵉ document dans `_sendResult()` (`response["result"] = result` = deep-copy) + la `String` de sortie, tout en gardant les `std::vector<MCPContent>` vivants → pic ≈ **3× la taille du texte**. Sur ESP8266 avec heap ~6-7 Ko (coulo entre MCP + web + SerialWeb), toute réponse log > ~600 o saturait → connexion coupée / `content: []`. Le patch construit la réponse entière dans **un seul document** et libère `contents` avant l'envoi → pic ≈ **1,5× le texte**.
+
+**Synchronisation** : cette copie représente la **v1.2.0** (les **6** patches locaux y sont intégrés). Si `Fo170/Server_MCP` publie une v1.2.0 officielle, recopier le `Server_MCP.h` officiel dans `lib/mcp/` après vérification, ou fusionner.
+
+---
+
+## 🆕 Nouveautés v1.2.0
+
+6 corrections intégrées dans cette version (dont les 6 patches locaux — voir section « Modifications locales ») :
 
 1. **Notifications JSON-RPC → HTTP 202** — `_processJSONRPC()` répond **HTTP 202 corps vide** aux notifications (message SANS `id`), comme le veut la spec MCP Streamable HTTP. Sans cela, LM Studio / SDK officiel MCP lève *« Received an unexpected response to a notification »* et n'affiche pas les outils.
 2. **Envoi des réponses par chunks ≤ 1024 o** — `_sendJSONResponse()` fixe le `Content-Length` puis streame par `sendContent()`. `WebServer::send(200, type, content)` écrivait tout le corps en un seul `write()` → tronqué au-delà du buffer TCP ESP32 (`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` = 5760 o) ; `tools/list` (~8 Ko) était coupé → outils invisibles pour LM Studio.
 3. **Contrôle de flux « style TCP »** — fenêtre de **canaux glissante** : `setFlowControl(maxRequests, windowMs)` (défaut `MCP_FLOW_MAX` = 8 / `MCP_FLOW_WINDOW_MS` = 30 s). Au-delà du max, la requête est **rejetée immédiatement en HTTP 429** (protocole MCP standard de rate-limiting) avec une erreur JSON-RPC « Trop de demandes MCP — canaux X/Y (saturé) ». État exposé via `flowMax()` / `flowUsed()` / `flowWindowMs()` / `flowEtat()` (états `libre`, `pris en compte`, `ralentir`, `saturé`) pour le monitoring web/série.
+4. **`_handleToolsCall()` en UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi — corrige l'**OOM des réponses > ~600 o** sur heap serré (ESP8266 ~6-7 Ko) : l'ancien chemin gardait les `MCPContent` vivants jusqu'au deep-copy de `_sendResult()` → pic ≈ 3× le texte → réponses vides / connexion coupée.
+5. **`_handleToolsList()` en UN SEUL `JsonDocument`** — idem, corrige l'OOM de `tools/list` (~2 Ko) sur heap serré.
+6. **Port par défaut 8081 → 8081** — cohérence avec l'écosystème du coulomètre (8081 = Domoticz) : `begin(port = 8081)` + `_port(8081)`. Le firmware du coulomètre passe 8081 explicitement ; ce défaut évite toute ambiguïté.
 
 ---
 
@@ -66,7 +90,7 @@ ESP8266
 │                                                             │
 │  ┌─────────────────┐        ┌─────────────────────────────┐ │
 │  │  Serveur Web    │        │   Serveur MCP               │ │
-│  │  Port 80        │        │   Port 8080 (par défaut)    │ │
+│  │  Port 80        │        │   Port 8081 (par défaut)    │ │
 │  │                 │        │                             │ │
 │  │  GET /          │        │  POST /mcp                  │ │
 │  │  → Dashboard    │        │  → JSON-RPC                 │ │
@@ -78,7 +102,7 @@ ESP8266
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **Important** : Le serveur MCP utilise un **port distinct** (8080 par défaut) du serveur web (80) pour éviter tout conflit.
+> **Important** : Le serveur MCP utilise un **port distinct** (8081 par défaut) du serveur web (80) pour éviter tout conflit.
 
 ---
 
@@ -96,7 +120,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git@^1.1.2
+    https://github.com/Fo170/Server_MCP.git@^1.2.0
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
@@ -117,7 +141,7 @@ La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServ
 
 ```cpp
 // Créer l'instance du serveur MCP
-Server_MCP mcp("MonServeur", "1.1.2");
+Server_MCP mcp("MonServeur", "1.2.0");
 
 // Callback pour un outil
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
@@ -136,8 +160,8 @@ void setup() {
     // Enregistrer un outil
     mcp.registerTool("led_on", "Allume la LED", allumerLED);
 
-    // Démarrer le serveur sur le port 8080
-    mcp.begin(8080);
+    // Démarrer le serveur sur le port 8081
+    mcp.begin(8081);
 }
 
 void loop() {
@@ -153,7 +177,7 @@ void loop() {
 
 ```cpp
 Server_MCP(const String& serverName = "Server-MCP",
-           const String& serverVersion = "1.1.2",
+           const String& serverVersion = "1.2.0",
            uint16_t maxTools = 16,
            uint16_t maxResources = 8);
 ```
@@ -161,7 +185,7 @@ Server_MCP(const String& serverName = "Server-MCP",
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `serverName` | `String` | `"Server-MCP"` | Nom du serveur affiché au client |
-| `serverVersion` | `String` | `"1.1.2"` | Version du serveur |
+| `serverVersion` | `String` | `"1.2.0"` | Version du serveur |
 | `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils |
 | `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources |
 
@@ -229,11 +253,11 @@ mcp.registerResource("sensor://temperature", "Température", "Valeur actuelle", 
 Démarre le serveur HTTP MCP sur le port spécifié.
 
 ```cpp
-mcp.begin(8080);   // Port recommandé (différent du web)
+mcp.begin(8081);   // Port recommandé (différent du web)
 mcp.begin(3000);   // Ou tout autre port libre
 ```
 
-> ⚠️ **Par défaut : 8080** — ne jamais utiliser 80 si un serveur web tourne déjà.
+> ⚠️ **Par défaut : 8081** — ne jamais utiliser 80 si un serveur web tourne déjà.
 
 #### `handleClient()`
 **À appeler dans `loop()`** pour traiter les requêtes entrantes.
@@ -262,14 +286,14 @@ if (mcp.isRunning()) { /* ... */ }
 Retourne le port actuel du serveur MCP.
 
 ```cpp
-uint16_t port = mcp.getPort();  // Ex: 8080
+uint16_t port = mcp.getPort();  // Ex: 8081
 ```
 
 #### `getServerURL()`
 Retourne l'URL complète du serveur.
 
 ```cpp
-String url = mcp.getServerURL();  // "http://192.168.1.42:8080"
+String url = mcp.getServerURL();  // "http://192.168.1.42:8081"
 ```
 
 ### Création de contenu (retour des callbacks)
@@ -315,7 +339,7 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.1.2");
+Server_MCP mcp("ESP-LED", "1.2.0");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -346,7 +370,7 @@ void setup() {
     mcp.registerTool("led_off", "Éteint la LED", ledOff);
     mcp.registerTool("led_status", "Lit l'état de la LED", ledStatus);
 
-    mcp.begin(8080);
+    mcp.begin(8081);
     Serial.println("Serveur MCP: " + mcp.getServerURL());
 }
 
@@ -401,7 +425,7 @@ void setup() {
 #endif
 
 SERVER_WEB webServer(80);    // Interface utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.1.2");  // Port 8080 par défaut
+Server_MCP mcpServer("ESP-MCP", "1.2.0");  // Port 8081 par défaut
 
 void handleWebRoot() {
     webServer.send(200, "text/html", "<h1>Dashboard ESP8266</h1>");
@@ -414,14 +438,14 @@ void setup() {
     webServer.on("/", handleWebRoot);
     webServer.begin();
 
-    // Serveur MCP sur port 8080
+    // Serveur MCP sur port 8081
     mcpServer.registerTool("get_temp", "Lit la température", cb_temp);
-    mcpServer.begin(8080);
+    mcpServer.begin(8081);
 }
 
 void loop() {
     webServer.handleClient();    // Port 80
-    mcpServer.handleClient();    // Port 8080
+    mcpServer.handleClient();    // Port 8081
 }
 ```
 
@@ -439,7 +463,7 @@ Dans LM Studio : **Program** → **Install** → **Edit mcp.json**
 {
   "mcpServers": {
     "esp8266-mcp": {
-      "url": "http://192.168.1.XX:8080"
+      "url": "http://192.168.1.XX:8081"
     }
   }
 }
@@ -466,19 +490,19 @@ Tu peux maintenant demander au LLM :
 ### Vérifier le serveur
 
 ```bash
-curl http://192.168.1.XX:8080/
+curl http://192.168.1.XX:8081/
 ```
 
 ### Lister les outils
 
 ```bash
-curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json"   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json"   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
 ### Appeler un outil
 
 ```bash
-curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json"   -d '{
+curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json"   -d '{
     "jsonrpc": "2.0",
     "id": 2,
     "method": "tools/call",
@@ -492,7 +516,7 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ### Appeler avec paramètres
 
 ```bash
-curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json"   -d '{
+curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json"   -d '{
     "jsonrpc": "2.0",
     "id": 3,
     "method": "tools/call",
@@ -510,7 +534,7 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ### Ping
 
 ```bash
-curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json"   -d '{"jsonrpc":"2.0","id":4,"method":"ping","params":{}}'
+curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json"   -d '{"jsonrpc":"2.0","id":4,"method":"ping","params":{}}'
 ```
 
 ---
@@ -527,9 +551,9 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 
 ### Le LLM ne détecte pas les outils
 
-1. Vérifier l'URL dans `mcp.json` : `http://IP:8080`
+1. Vérifier l'URL dans `mcp.json` : `http://IP:8081`
 2. Tester avec `curl` la méthode `tools/list`
-3. Vérifier que le pare-feu n'a pas bloqué le port 8080
+3. Vérifier que le pare-feu n'a pas bloqué le port 8081
 4. Activer le debug série : `mcp.setSerialDebug(true, &Serial)`
 
 ### L'ESP8266 redémarre en boucle
@@ -552,7 +576,7 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 |-----------------|--------|
 | Protocole | JSON-RPC 2.0 |
 | Transport | HTTP POST |
-| Port par défaut | 8080 |
+| Port par défaut | 8081 |
 | Max outils | 16 (configurable) |
 | Max ressources | 8 (configurable) |
 | RAM requise | ~15 Ko |
@@ -569,6 +593,11 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.2.0
+- **Réponses en UN SEUL `JsonDocument`** (`_handleToolsCall` + `_handleToolsList`) + `contents.clear()` avant l'envoi — corrige l'**OOM des réponses > ~600 o** sur heap serré ESP8266 (~6-7 Ko) : `get_log_1h` / `get_log_h` / `tools/list` renvoyaient **vide / connexion coupée** (pic mémoire ramené de ~3× à ~1,5× le texte)
+- **Port par défaut 8080 → 8081** (`begin(port = 8081)` + `_port(8081)`) — cohérence avec l'écosystème du coulomètre (8080 = Domoticz)
+- Version des patches locaux 28/08 (HTTP 202, chunks ≤ 1024 o, contrôle de flux 429) désormais intégrée à la version
 
 ### v1.1.2
 - **Notifications JSON-RPC** : réponse **HTTP 202 corps vide** aux messages sans `id` (conforme spec MCP Streamable HTTP) — corrige *« Received an unexpected response to a notification »* sous LM Studio / SDK officiel
@@ -587,7 +616,7 @@ curl -X POST http://192.168.1.XX:8080/mcp   -H "Content-Type: application/json" 
 - Implémentation complète du protocole MCP (JSON-RPC 2.0)
 - Support des outils avec paramètres typés
 - Support des ressources
-- Port configurable (défaut: 8080)
+- Port configurable (défaut: 8081)
 - Debug série optionnel
 - Validation automatique des paramètres
 

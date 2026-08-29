@@ -1,5 +1,5 @@
 // ============================================================================
-// Server_MCP.h
+// Server_MCP.h - version 1.2.0
 // Bibliotheque C++ MCP pour ESP8266/ESP32 — Port configurable
 // ============================================================================
 
@@ -86,7 +86,7 @@ using MCPToolCallback = std::function<std::vector<MCPContent>(const JsonObject& 
 class Server_MCP {
 public:
     Server_MCP(const String& serverName = "Server-MCP",
-               const String& serverVersion = "1.1.2",
+               const String& serverVersion = "1.2.0",
                uint16_t maxTools = 16,
                uint16_t maxResources = 8);
     ~Server_MCP();
@@ -112,7 +112,7 @@ public:
     // ═════════════════════════════════════════════════════════════════
     // DEMARRAGE AVEC PORT PERSONNALISE
     // ═════════════════════════════════════════════════════════════════
-    bool begin(uint16_t port = 8080);  // ← Par defaut 8080, pas 80 !
+    bool begin(uint16_t port = 8081);  // ← PATCH LOCAL 29/08 : défaut 8081 (Domoticz=8080), pas 80 !
     
     void handleClient();
     void end();
@@ -208,7 +208,7 @@ inline Server_MCP::Server_MCP(const String& serverName,
     , _debugEnabled(false)
     , _debugSerial(nullptr)
     , _server(nullptr)
-    , _port(8080)
+    , _port(8081)   // PATCH LOCAL 29/08 : défaut 8081 (Domoticz=8080) — cohérent avec l'écosystème
     , _maxTools(maxTools)
     , _maxResources(maxResources)
     , _requestId(0)
@@ -556,8 +556,14 @@ inline void Server_MCP::_handleInitialize(const JsonObject& params, uint32_t id)
 }
 
 inline void Server_MCP::_handleToolsList(uint32_t id) {
-    JsonDocument resultDoc;
-    JsonObject result = resultDoc.to<JsonObject>();
+    // ⚠️ PATCH LOCAL (29/08/2026) : réponse construite dans UN SEUL JsonDocument
+    // (comme _handleToolsCall) — l'ancien _sendResult deep-copait le result dans
+    // un 2ᵉ doc → pic ~2× la taille (tools/list ≈ 2 Ko) → OOM sur ESP8266.
+    JsonDocument doc;
+    JsonObject response = doc.to<JsonObject>();
+    response["jsonrpc"] = "2.0";
+    response["id"] = id;
+    JsonObject result = response["result"].to<JsonObject>();
     JsonArray tools = result["tools"].to<JsonArray>();
     for (const auto& entry : _tools) {
         JsonObject toolObj = tools.add<JsonObject>();
@@ -574,7 +580,7 @@ inline void Server_MCP::_handleToolsList(uint32_t id) {
             if (param.required) required.add(param.name);
         }
     }
-    _sendResult(id, result);
+    _sendJSONResponse(response);
 }
 
 inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) {
@@ -596,12 +602,24 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, uint32_t id) 
     }
     _log("Appel outil: " + toolName);
     std::vector<MCPContent> contents = _tools[idx].callback(arguments);
-    JsonDocument finalDoc;
-    JsonObject finalResult = finalDoc.to<JsonObject>();
+
+    // ⚠️ PATCH LOCAL (29/08/2026) : construire la réponse dans UN SEUL
+    // JsonDocument (pas de _sendResult → deep-copy du result dans un 2ᵉ doc).
+    // L'ancien chemin gardait contents (gros String de log) + finalDoc + doc
+    // + output → pic ~3× la taille du texte. Sur ESP8266 (heap ~6-7 Ko), les
+    // réponses get_log_* (> ~600 o) saturent → réponse vide / connexion coupée.
+    // Désormais : 1 seul doc, contents libéré avant l'envoi → pic ~1,5× texte.
+    JsonDocument doc;
+    JsonObject response = doc.to<JsonObject>();
+    response["jsonrpc"] = "2.0";
+    response["id"] = id;
+    JsonObject finalResult = response["result"].to<JsonObject>();
     JsonArray contentArray = finalResult["content"].to<JsonArray>();
     _serializeContents(contents, contentArray);
     finalResult["isError"] = false;
-    _sendResult(id, finalResult);
+    contents.clear();          // libère les String (gros texte log) AVANT l'envoi
+    contents.shrink_to_fit();
+    _sendJSONResponse(response);
     _log("Outil " + toolName + " execute avec succes");
 }
 

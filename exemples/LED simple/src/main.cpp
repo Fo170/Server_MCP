@@ -11,7 +11,7 @@
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.1.2");
+Server_MCP mcp("ESP-LED", "1.2.0");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -42,7 +42,7 @@ void setup() {
     mcp.registerTool("led_off", "Éteint la LED", ledOff);
     mcp.registerTool("led_status", "Lit l'état de la LED", ledStatus);
 
-    mcp.begin(8080);
+    mcp.begin(8081);
     Serial.println("Serveur MCP: " + mcp.getServerURL());
 }
 

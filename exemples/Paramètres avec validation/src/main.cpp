@@ -15,7 +15,7 @@
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED-RGB", "1.1.2");
+Server_MCP mcp("ESP-LED-RGB", "1.2.0");
 
 std::vector<MCPContent> clignoterLED(const JsonObject& params) {
     String couleur = params["couleur"].as<String>();
@@ -54,7 +54,7 @@ void setup() {
     mcp.addToolParam("duree_ms", "Durée d'un clignotement (ms)", "integer", false);
     mcp.addToolParam("repetitions", "Nombre de clignotements", "integer", false);
 
-    mcp.begin(8080);
+    mcp.begin(8081);
     Serial.println("Serveur MCP: " + mcp.getServerURL());
 }
 
