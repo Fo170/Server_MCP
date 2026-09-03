@@ -1,45 +1,65 @@
 # Server_MCP
 
-Bibliothèque C++ pour ESP8266 implémentant le **Model Context Protocol (MCP)** — un protocole ouvert standardisant la communication entre les modèles de langage (LLM) et les systèmes matériels.
+Bibliothèque C++ pour **ESP8266 / ESP32** implémentant le **Model Context Protocol (MCP)** — un protocole ouvert standardisant la communication entre les modèles de langage (LLM) et les systèmes matériels.
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.2.0  
+> **Version** : 1.3.2  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
 
-## 🔧 Modifications locales — COPIE VENDORISÉE (coulomètre)
+## 🔧 Correctifs majeurs intégrés
 
-> ⚠️ **Cette copie (`lib/mcp/`) est celle UTILISÉE par le firmware du coulomètre** (WeMos Mini — `ESP8266WebServer`). Elle remplace la dépendance git `https://github.com/Fo170/Server_MCP.git` de `platformio.ini`. Elle ne doit **PAS** être remplacée par le repo GitHub d'origine (qui n'a pas les patches ci-dessous) et **PAS** être effacée : un `rm -rf .pio/libdeps/d1_mini` réinstallerait la version git NON patchée → MCP cassé (réponses vides).
+Depuis la v1.1.2, la bibliothèque intègre une série de correctifs d'évolution (robustesse HTTP, contrôle de flux, gestion mémoire) — historique détaillé dans le [Changelog](#changelog). Le tableau ci-dessous résume le **rôle** de chacun :
 
-### Patches locaux appliqués
+| Version | Date | Correctif | Rôle / Effet |
+|---------|------|-----------|--------------|
+| **v1.1.2** | **28/08/2026** | Contrôle de flux « style TCP » (fenêtre glissante, HTTP 429) | Évite l'engorgement quand un LLM rafale des requêtes |
+| **v1.1.2** | **28/08/2026** | Notifications JSON-RPC → HTTP 202 corps vide | Conforme spec MCP Streamable HTTP (LM Studio / SDK officiel) |
+| **v1.1.2** | **28/08/2026** | Envoi des réponses par chunks ≤ 1024 o (`setContentLength` + `sendContent`) | `tools/list` (~8 Ko) n'est plus tronqué au buffer TCP |
+| **v1.2.0** | **29/08/2026** | `_handleToolsCall()` : réponse construite en **UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi | Corrige l'**OOM des réponses > ~600 o** sur heap serré (~6-7 Ko) : `get_log_1h` / `get_log_h` de l'écosystème IoT renvoyaient **vide** |
+| **v1.2.0** | **29/08/2026** | `_handleToolsList()` : même pattern mono-document | Corrige `tools/list` (~2 Ko) qui saturait en OOM |
+| **v1.2.0** | **29/08/2026** | **Port par défaut 8080 → 8081** (`begin(port = 8081)` + `_port(8081)`) | Cohérence avec l'écosystème IoT où **8080 = Domoticz** (`DOMOTICZ_PORT`) → pas d'ambiguïté si le port n'est pas passé explicitement |
+| **v1.3.0** | **31/08/2026** | **Canaux PONDÉRÉS** + en-têtes **`Retry-After` / `X-RateLimit-*`** sur le 429 | `registerTool(name, desc, cb, poids)` (défaut 1) : chaque appel consomme `poids` canaux (léger=1 … lourd=3). Une rafale d'outils lourds sature la fenêtre 3× plus vite → rejet **HTTP 429 AVANT** tout traitement bloquant (anti-crash sous charge Domoticz/TLS) ; le client (LM Studio) est averti d'attendre |
+| **v1.3.0** | **31/08/2026** | **Backpressure MÉMOIRE (XON/XOFF)** + seuls `tools/call` consomment | `setFlowPression(cb, maxSousPression = 2)` : si `cb()` (heap bas/fragmenté) → max effectif chute à `MCP_FLOW_MAX_SOUS_PRESSION` ; `ping`/`initialize`/`tools/list`/`resources` restent gratuits ; `flowEtat()` ajoute « (XOFF memoire) » |
+| **v1.3.1** | **01/09/2026** | **Rejet 429 à 2 messages distincts** | (a) `poids > maxEff` → « outil trop lourd (poids N) pour l'état de flux actuel » (cas structurel, ex. poids 3 quand le XOFF force max=2 — corrige le trompeur « canaux 0/2 ») ; (b) sinon « canaux X/M (saturé)… retry ~Y s » (rafale) |
+| **v1.3.2** | **03/09/2026** | **Robustesse & interop** | Écho **exact** de l'`id` JSON-RPC (string / négatif / > 2³²) ; notifications **exécutées** puis HTTP 202 (spec) ; validation de type **stricte v7** (`integer` = `JsonInteger`, `array`/`object` vérifiés) ; flux : **refus sans altérer la fenêtre**, `Retry-After` 2 s sur rejet structurel + message selon la cause ; garde `poids > flowMax` ; plafond body `MCP_MAX_BODY` (HTTP 413) ; `defaultValue` retiré de `addToolParam` |
 
-| Date | Patch | Effet |
-|------|-------|-------|
-| **28/08/2026** | Contrôle de flux « style TCP » (fenêtre glissante, HTTP 429) | Évite l'engorgement quand un LLM rafale des requêtes |
-| **28/08/2026** | Notifications JSON-RPC → HTTP 202 corps vide | Conforme spec MCP Streamable HTTP (LM Studio / SDK officiel) |
-| **28/08/2026** | Envoi des réponses par chunks ≤ 1024 o (`setContentLength` + `sendContent`) | `tools/list` (~8 Ko) n'est plus tronqué au buffer TCP |
-| **29/08/2026** | `_handleToolsCall()` : réponse construite en **UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi | Corrige l'**OOM des réponses > ~600 o** sur heap serré (~6-7 Ko) : `get_log_1h` / `get_log_h` du coulomètre renvoyaient **vide** |
-| **29/08/2026** | `_handleToolsList()` : même pattern mono-document | Corrige `tools/list` (~2 Ko) qui saturait en OOM |
-| **29/08/2026** | **Port par défaut 8081 → 8081** (`begin(port = 8081)` + `_port(8081)`) | Cohérence avec l'écosystème du coulomètre où **8081 = Domoticz** (`DOMOTICZ_PORT`) → pas d'ambiguïté si le port n'est pas passé explicitement |
-
-**Pourquoi le patch 29/08 ?** L'ancien chemin construisait `finalDoc` + un 2ᵉ document dans `_sendResult()` (`response["result"] = result` = deep-copy) + la `String` de sortie, tout en gardant les `std::vector<MCPContent>` vivants → pic ≈ **3× la taille du texte**. Sur ESP8266 avec heap ~6-7 Ko (coulo entre MCP + web + SerialWeb), toute réponse log > ~600 o saturait → connexion coupée / `content: []`. Le patch construit la réponse entière dans **un seul document** et libère `contents` avant l'envoi → pic ≈ **1,5× le texte**.
-
-**Synchronisation** : cette copie représente la **v1.2.0** (les **6** patches locaux y sont intégrés). Si `Fo170/Server_MCP` publie une v1.2.0 officielle, recopier le `Server_MCP.h` officiel dans `lib/mcp/` après vérification, ou fusionner.
+**Pourquoi les correctifs du 29/08 ?** L'ancien chemin construisait `finalDoc` + un 2ᵉ document dans `_sendResult()` (`response["result"] = result` = deep-copy) + la `String` de sortie, tout en gardant les `std::vector<MCPContent>` vivants → pic ≈ **3× la taille du texte**. Sur ESP8266 avec heap ~6-7 Ko (coulo entre MCP + web + SerialWeb), toute réponse log > ~600 o saturait → connexion coupée / `content: []`. Le correctif construit la réponse entière dans **un seul document** et libère `contents` avant l'envoi → pic ≈ **1,5× le texte**.
 
 ---
 
-## 🆕 Nouveautés v1.2.0
+## 🆕 Nouveautés (v1.1.2 → v1.3.2)
 
-6 corrections intégrées dans cette version (dont les 6 patches locaux — voir section « Modifications locales ») :
+Récapitulatif chronologique des évolutions — rôle et détail de chaque correctif dans le tableau [ci-dessus](#correctifs-majeurs-intégrés) et dans le [Changelog](#changelog).
 
-1. **Notifications JSON-RPC → HTTP 202** — `_processJSONRPC()` répond **HTTP 202 corps vide** aux notifications (message SANS `id`), comme le veut la spec MCP Streamable HTTP. Sans cela, LM Studio / SDK officiel MCP lève *« Received an unexpected response to a notification »* et n'affiche pas les outils.
-2. **Envoi des réponses par chunks ≤ 1024 o** — `_sendJSONResponse()` fixe le `Content-Length` puis streame par `sendContent()`. `WebServer::send(200, type, content)` écrivait tout le corps en un seul `write()` → tronqué au-delà du buffer TCP ESP32 (`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` = 5760 o) ; `tools/list` (~8 Ko) était coupé → outils invisibles pour LM Studio.
-3. **Contrôle de flux « style TCP »** — fenêtre de **canaux glissante** : `setFlowControl(maxRequests, windowMs)` (défaut `MCP_FLOW_MAX` = 8 / `MCP_FLOW_WINDOW_MS` = 30 s). Au-delà du max, la requête est **rejetée immédiatement en HTTP 429** (protocole MCP standard de rate-limiting) avec une erreur JSON-RPC « Trop de demandes MCP — canaux X/Y (saturé) ». État exposé via `flowMax()` / `flowUsed()` / `flowWindowMs()` / `flowEtat()` (états `libre`, `pris en compte`, `ralentir`, `saturé`) pour le monitoring web/série.
-4. **`_handleToolsCall()` en UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi — corrige l'**OOM des réponses > ~600 o** sur heap serré (ESP8266 ~6-7 Ko) : l'ancien chemin gardait les `MCPContent` vivants jusqu'au deep-copy de `_sendResult()` → pic ≈ 3× le texte → réponses vides / connexion coupée.
-5. **`_handleToolsList()` en UN SEUL `JsonDocument`** — idem, corrige l'OOM de `tools/list` (~2 Ko) sur heap serré.
-6. **Port par défaut 8081 → 8081** — cohérence avec l'écosystème du coulomètre (8081 = Domoticz) : `begin(port = 8081)` + `_port(8081)`. Le firmware du coulomètre passe 8081 explicitement ; ce défaut évite toute ambiguïté.
+### v1.1.2 — robustesse HTTP & flux
+1. **Notifications JSON-RPC → HTTP 202 corps vide** — réponse vide aux messages SANS `id` (spec MCP Streamable HTTP). Sans cela, LM Studio / SDK officiel lève *« Received an unexpected response to a notification »* et n'affiche pas les outils.
+2. **Envoi des réponses par chunks ≤ 1024 o** — `setContentLength()` + `sendContent()` ; un seul `send(200, type, content)` tronquait au-delà du buffer TCP ESP32 (5760 o) → `tools/list` (~8 Ko) était coupé.
+3. **Contrôle de flux « style TCP »** — fenêtre de **canaux glissante** : `setFlowControl(maxRequests, windowMs)` (défaut `MCP_FLOW_MAX` = 8 / `MCP_FLOW_WINDOW_MS` = 30 s). Au-delà du max → **HTTP 429** + erreur JSON-RPC. État via `flowMax()` / `flowUsed()` / `flowWindowMs()` / `flowEtat()` (`libre`, `pris en compte`, `ralentir`, `saturé`).
+
+### v1.2.0 — réponses mono-document & port 8081
+1. **`_handleToolsCall()` en UN SEUL `JsonDocument`** + `contents.clear()` avant l'envoi — corrige l'**OOM des réponses > ~600 o** sur heap serré (ESP8266 ~6-7 Ko) : l'ancien chemin (deep-copy dans `_sendResult()`) → pic ≈ 3× le texte → réponses vides / connexion coupée.
+2. **`_handleToolsList()` en UN SEUL `JsonDocument`** — idem, corrige l'OOM de `tools/list` (~2 Ko).
+3. **Port par défaut 8080 → 8081** — cohérence avec l'écosystème IoT (**8080 = Domoticz**) : le MCP ne peut plus entrer en conflit avec Domoticz ni avec un serveur web sur 80.
+
+### v1.3.0 — contrôle de flux robuste
+- **Canaux PONDÉRÉS** : `registerTool(name, desc, cb, poids)` (défaut 1) — chaque `tools/call` consomme `poids` canaux (léger=1 … lourd=3) ; une rafale d'outils lourds sature la fenêtre 3× plus vite.
+- En-têtes **`Retry-After` / `X-RateLimit-*`** sur le 429 (le client patiente explicitement).
+- **Backpressure mémoire XON/XOFF** : `setFlowPression(cb, maxSousPression = 2)` — heap bas → max effectif réduit, `flowEtat()` ajoute « (XOFF memoire) ».
+- **Seuls `tools/call` consomment** des canaux (`ping`/`initialize`/`tools/list`/`resources` gratuits). Accesseurs : `flowMaxEffectif()` / `flowUsedPonderes()` / `flowRetryAfterMs()`.
+
+### v1.3.1 — messages d'erreur justes
+- Rejet **HTTP 429 à 2 messages distincts** : « outil trop lourd (poids N) » (cas structurel `poids > maxEff`, ex. poids 3 sous XOFF max=2) vs « canaux X/M (saturé)… retry ~Y s » (rafale).
+
+### v1.3.2 — robustesse & interop
+- **Écho exact de l'`id` JSON-RPC** (number | string, y compris négatifs et > 2³²) ; erreurs de parse/version → `"id": null` (spec).
+- **Notifications** : la méthode est désormais **exécutée** (effets de bord + consommation de canaux) puis **HTTP 202** est répondu **sans** corps JSON-RPC (spec JSON-RPC + MCP Streamable HTTP).
+- **Validation de type stricte v7** : `integer` = `JsonInteger` (rejette `1.5`), `number` = entier/`float`/`double`, `array` = `JsonArray`, `object` = `JsonObject`.
+- **Flux** : un **refus ne modifie plus** l'état de la fenêtre ; rejet structurel (`poids > maxEff`) → `Retry-After` **2 s** (le temps n'est pas le facteur) + message selon la cause (pression mémoire ou max configuré) ; warning à `registerTool` si `poids > flowMax`.
+- **Plafond body** `MCP_MAX_BODY` (8 Ko) → HTTP 413 sans parse.
+- **API** : `addToolParam(name, description, type, required)` — le paramètre inerte `defaultValue` a été retiré.
 
 ---
 
@@ -120,7 +140,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git@^1.2.0
+    https://github.com/Fo170/Server_MCP.git@^1.3.2
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
@@ -141,7 +161,7 @@ La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServ
 
 ```cpp
 // Créer l'instance du serveur MCP
-Server_MCP mcp("MonServeur", "1.2.0");
+Server_MCP mcp("MonServeur", "1.3.2");
 
 // Callback pour un outil
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
@@ -177,7 +197,7 @@ void loop() {
 
 ```cpp
 Server_MCP(const String& serverName = "Server-MCP",
-           const String& serverVersion = "1.2.0",
+           const String& serverVersion = "1.3.2",
            uint16_t maxTools = 16,
            uint16_t maxResources = 8);
 ```
@@ -185,7 +205,7 @@ Server_MCP(const String& serverName = "Server-MCP",
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `serverName` | `String` | `"Server-MCP"` | Nom du serveur affiché au client |
-| `serverVersion` | `String` | `"1.2.0"` | Version du serveur |
+| `serverVersion` | `String` | `"1.3.2"` | Version du serveur |
 | `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils |
 | `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources |
 
@@ -208,19 +228,22 @@ mcp.setSerialDebug(false);          // Désactiver
 
 ### Enregistrement des outils
 
-#### `registerTool(name, description, callback)`
+#### `registerTool(name, description, callback, poids)`
 Enregistre un nouvel outil accessible par le LLM.
 
 ```cpp
 mcp.registerTool("temperature", "Lit la température du capteur", cb_temperature);
+mcp.registerTool("historique", "Historique complet (coûteux)", cb_historique, 3);  // poids 3 (lourd)
 ```
+
+- `poids` (v1.3.0) : canaux de la fenêtre de flux consommés par appel (1 = léger, 3 = lourd). Les outils lourds (lectures HTTP, grosses Strings) doivent porter un poids élevé pour qu'une rafale soit rejetée en 429 avant de saturer la mémoire.
 
 **Type du callback :**
 ```cpp
 std::vector<MCPContent> maFonction(const JsonObject& params);
 ```
 
-#### `addToolParam(name, description, type, required, defaultValue)`
+#### `addToolParam(name, description, type, required)`
 Ajoute un paramètre au **dernier outil enregistré**.
 
 ```cpp
@@ -229,7 +252,7 @@ mcp.addToolParam("temperature", "Température cible en °C", "integer", true);
 mcp.addToolParam("mode", "Mode: eco, confort, boost", "string", false);
 ```
 
-**Types supportés :** `"string"`, `"number"`, `"integer"`, `"boolean"`, `"array"`, `"object"`
+**Types supportés :** `"string"`, `"number"`, `"integer"`, `"boolean"`, `"array"`, `"object"` — la validation est stricte (v1.3.2) : `integer` exige un entier JSON (`1.5` est rejeté), `number` accepte entier/flottant, `array`/`object` sont vérifiés selon leur type JSON.
 
 #### `unregisterTool(name)`
 Supprime un outil.
@@ -339,7 +362,7 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.2.0");
+Server_MCP mcp("ESP-LED", "1.3.2");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -425,7 +448,7 @@ void setup() {
 #endif
 
 SERVER_WEB webServer(80);    // Interface utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.2.0");  // Port 8081 par défaut
+Server_MCP mcpServer("ESP-MCP", "1.3.2");  // Port 8081 par défaut
 
 void handleWebRoot() {
     webServer.send(200, "text/html", "<h1>Dashboard ESP8266</h1>");
@@ -457,19 +480,19 @@ void loop() {
 
 Dans LM Studio : **Program** → **Install** → **Edit mcp.json**
 
-### 2. Ajouter le serveur ESP8266
+### 2. Ajouter le serveur ESP8266 / ESP32
 
 ```json
 {
   "mcpServers": {
-    "esp8266-mcp": {
+    "esp-mcp": {
       "url": "http://192.168.1.XX:8081"
     }
   }
 }
 ```
 
-Remplace `192.168.1.XX` par l'IP affichée dans le Serial Monitor au démarrage de l'ESP8266.
+Remplace `192.168.1.XX` par l'IP affichée dans le Serial Monitor au démarrage de l'ESP8266 / ESP32.
 
 ### 3. Redémarrer LM Studio
 
@@ -558,9 +581,17 @@ curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json" 
 
 ### L'ESP8266 redémarre en boucle
 
-- Réduire la taille des documents JSON (`StaticJsonDocument`)
-- Diminuer `maxTools` à 8 ou 4
-- Vérifier les fuites mémoire dans les callbacks
+- Réduire les grosses allocations (grandes `String` de log construites dans les callbacks, payloads JSON volumineux)
+- Activer la backpressure mémoire `mcp.setFlowPression(cb, ...)` (XOFF) pour rejeter tôt les appels lourds quand le heap est bas
+- Diminuer `maxTools` / `maxResources` à la construction
+
+### HTTP 429 « canaux X/M (saturé) » ou « outil trop lourd (poids N) »
+
+| Symptôme | Cause probable | Solution |
+|----------|---------------|----------|
+| « Trop de demandes MCP — canaux X/M (saturé)… retry ~Y s » | Rafale de requêtes > fenêtre (défaut 8 / 30 s) | Espacer les requêtes, respecter `Retry-After` |
+| « outil trop lourd (poids N) pour l'état de flux actuel » | `poids` de l'outil > max effectif (ex. poids 3 sous XOFF mémoire max=2) | Heap bas → attendre la fin de pression, réduire la charge (Telegram/HTTP) |
+| `flowEtat()` affiche « (XOFF memoire) » | Callback `setFlowPression()` vrai (heap bas/fragmenté) | Libérer de la mémoire ou rejeter moins de canaux (`maxSousPression`) |
 
 ### Erreur "Tool not found"
 
@@ -594,10 +625,29 @@ curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json" 
 
 ## 📝 Changelog
 
+### v1.3.2 — 03/09/2026
+- **Écho exact de l'`id` JSON-RPC** : les handlers propagent `JsonVariant` au lieu d'un `uint32_t` → les ids `string`, négatifs ou > 2³² sont fidèlement renvoyés ; erreur de parse/version → `"id": null`.
+- **Notifications exécutées puis HTTP 202** : un message sans `id` est désormais traité (effet de bord, consommation de canaux) mais sans réponse JSON-RPC (`_suppressResponse`), puis `HTTP 202` corps vide (spec JSON-RPC + MCP Streamable HTTP).
+- **Validation de type stricte v7** (`_validateParams`) : `integer` = `JsonInteger` (rejette `1.5`/`1.0`), `number` = `JsonInteger|float|double`, `array` = `JsonArray`, `object` = `JsonObject`, `boolean` inchangé.
+- **Flux** : la validation des paramètres précède la consommation de canaux ; un **refus ne modifie pas** `_flowUsed`/`_flowWinStart` ; rejet structurel (`poids > maxEff`) → `Retry-After` **2 s** et message selon la cause (pression mémoire XOFF ou max configuré) ; warning à `registerTool` si `poids > flowMax`.
+- **Plafond body** : `MCP_MAX_BODY` (8 Ko) → réponse `HTTP 413` sans désérialisation (anti-OOM ESP8266).
+- **Nettoyage** : `addToolParam()` perd son paramètre inerte `defaultValue` ; `_buildToolSchema()` réutilisé par `_handleToolsList` ; `_requestId` supprimé.
+
+### v1.3.1 — 01/09/2026
+- **Rejet 429 à 2 messages distincts** dans `_handleToolsCall` : (a) `poids > maxEff` → « outil trop lourd (poids N) pour l'état de flux actuel (max M canaux sous pression mémoire) » — cas structurel (ex. poids 3 quand le XOFF force max=2, qui donnait le trompeur « canaux 0/2 ») ; (b) sinon « canaux X/M (saturé)… retry ~Y s » — cas rafale.
+- Sans changement de comportement : la logique de canaux pondérés reste identique à la v1.3.0.
+
+### v1.3.0 — 31/08/2026
+- **Canaux PONDÉRÉS** : `registerTool(name, desc, callback, poids)` (défaut 1) — chaque outil consomme `poids` canaux (léger=1 ... lourd=3). Une rafale d'outils lourds sature la fenêtre plus vite → rejet **HTTP 429** AVANT tout traitement bloquant (garantie anti-crash sous charge Domoticz/TLS).
+- **`Retry-After` + `X-RateLimit-*`** sur le 429 : `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Window` → le client (LM Studio) est explicitement averti de patienter (équivalent XOFF des protocoles série).
+- **Backpressure MÉMOIRE (XON/XOFF)** : `setFlowPression(callback, maxSousPression = 2)` — si le callback renvoie `true` (heap bas/fragmenté), le **max effectif chute à `MCP_FLOW_MAX_SOUS_PRESSION`** ; retour au max normal quand ça va mieux. États : `flowEtat()` ajoute « (XOFF memoire) ».
+- **Seuls `tools/call` consomment des canaux** : `ping`/`initialize`/`tools/list`/`resources` restent gratuits (handshake non limité).
+- Accesseurs : `flowMaxEffectif()`, `flowUsedPonderes()`, `flowRetryAfterMs()`.
+
 ### v1.2.0
 - **Réponses en UN SEUL `JsonDocument`** (`_handleToolsCall` + `_handleToolsList`) + `contents.clear()` avant l'envoi — corrige l'**OOM des réponses > ~600 o** sur heap serré ESP8266 (~6-7 Ko) : `get_log_1h` / `get_log_h` / `tools/list` renvoyaient **vide / connexion coupée** (pic mémoire ramené de ~3× à ~1,5× le texte)
-- **Port par défaut 8080 → 8081** (`begin(port = 8081)` + `_port(8081)`) — cohérence avec l'écosystème du coulomètre (8080 = Domoticz)
-- Version des patches locaux 28/08 (HTTP 202, chunks ≤ 1024 o, contrôle de flux 429) désormais intégrée à la version
+- **Port par défaut 8080 → 8081** (`begin(port = 8081)` + `_port(8081)`) — cohérence avec l'écosystème IoT (8080 = Domoticz)
+- Correctifs du **29/08** (réponses mono-document + port 8081) intégrés à la version
 
 ### v1.1.2
 - **Notifications JSON-RPC** : réponse **HTTP 202 corps vide** aux messages sans `id` (conforme spec MCP Streamable HTTP) — corrige *« Received an unexpected response to a notification »* sous LM Studio / SDK officiel

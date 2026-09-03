@@ -48,7 +48,7 @@ bool chauffageActif = false;
 // ═══════════════════════════════════════════
 
 SERVER_WEB webServer(80);    // Interface web utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.2.0");  // Serveur MCP sur port 8081
+Server_MCP mcpServer("ESP-MCP", "1.3.2");  // Serveur MCP sur port 8081
 
 // ═══════════════════════════════════════════
 // FONCTIONS WEB (Port 80)

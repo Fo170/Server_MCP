@@ -11,7 +11,7 @@
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.2.0");
+Server_MCP mcp("ESP-LED", "1.3.2");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
