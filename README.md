@@ -4,7 +4,7 @@ Bibliothèque C++ pour **ESP8266 / ESP32** implémentant le **Model Context Prot
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.3.2  
+> **Version** : 1.4.0  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
@@ -25,12 +25,13 @@ Depuis la v1.1.2, la bibliothèque intègre une série de correctifs d'évolutio
 | **v1.3.0** | **31/08/2026** | **Backpressure MÉMOIRE (XON/XOFF)** + seuls `tools/call` consomment | `setFlowPression(cb, maxSousPression = 2)` : si `cb()` (heap bas/fragmenté) → max effectif chute à `MCP_FLOW_MAX_SOUS_PRESSION` ; `ping`/`initialize`/`tools/list`/`resources` restent gratuits ; `flowEtat()` ajoute « (XOFF memoire) » |
 | **v1.3.1** | **01/09/2026** | **Rejet 429 à 2 messages distincts** | (a) `poids > maxEff` → « outil trop lourd (poids N) pour l'état de flux actuel » (cas structurel, ex. poids 3 quand le XOFF force max=2 — corrige le trompeur « canaux 0/2 ») ; (b) sinon « canaux X/M (saturé)… retry ~Y s » (rafale) |
 | **v1.3.2** | **03/09/2026** | **Robustesse & interop** | Écho **exact** de l'`id` JSON-RPC (string / négatif / > 2³²) ; notifications **exécutées** puis HTTP 202 (spec) ; validation de type **stricte v7** (`integer` = `JsonInteger`, `array`/`object` vérifiés) ; flux : **refus sans altérer la fenêtre**, `Retry-After` 2 s sur rejet structurel + message selon la cause ; garde `poids > flowMax` ; plafond body `MCP_MAX_BODY` (HTTP 413) ; `defaultValue` retiré de `addToolParam` |
+| **v1.4.0** | **20/09/2026** | **Catalogue MCP dynamique** | `setMaxTools()` / `setMaxResources()` rendent la capacité **programmable à l'exécution** (plus figée au constructeur ; `0` = aucun) ; `registerTool()` / `unregisterTool()` / `registerResource()` / `unregisterResource()` utilisables **à chaud** après `begin()`, en désignant l'entrée **par son nom** ; surcharge `addToolParam(toolName, …)` pour cibler un outil nommé ; copie locale du callback avant appel (modification du catalogue depuis un callback sûre) |
 
 **Pourquoi les correctifs du 29/08 ?** L'ancien chemin construisait `finalDoc` + un 2ᵉ document dans `_sendResult()` (`response["result"] = result` = deep-copy) + la `String` de sortie, tout en gardant les `std::vector<MCPContent>` vivants → pic ≈ **3× la taille du texte**. Sur ESP8266 avec heap ~6-7 Ko (coulo entre MCP + web + SerialWeb), toute réponse log > ~600 o saturait → connexion coupée / `content: []`. Le correctif construit la réponse entière dans **un seul document** et libère `contents` avant l'envoi → pic ≈ **1,5× le texte**.
 
 ---
 
-## 🆕 Nouveautés (v1.1.2 → v1.3.2)
+## 🆕 Nouveautés (v1.1.2 → v1.4.0)
 
 Récapitulatif chronologique des évolutions — rôle et détail de chaque correctif dans le tableau [ci-dessus](#correctifs-majeurs-intégrés) et dans le [Changelog](#changelog).
 
@@ -60,6 +61,12 @@ Récapitulatif chronologique des évolutions — rôle et détail de chaque corr
 - **Flux** : un **refus ne modifie plus** l'état de la fenêtre ; rejet structurel (`poids > maxEff`) → `Retry-After` **2 s** (le temps n'est pas le facteur) + message selon la cause (pression mémoire ou max configuré) ; warning à `registerTool` si `poids > flowMax`.
 - **Plafond body** `MCP_MAX_BODY` (8 Ko) → HTTP 413 sans parse.
 - **API** : `addToolParam(name, description, type, required)` — le paramètre inerte `defaultValue` a été retiré.
+
+### v1.4.0 — catalogue MCP dynamique
+- **Capacité programmable** : `setMaxTools(n)` / `setMaxResources(n)` ajustent le plafond **à l'exécution** (le constructeur garde `16` / `8` par défaut ; `0` = aucune entrée autorisée). Accesseurs `maxTools()` / `maxResources()`. Un appel qui augmente la capacité `reserve()` la mémoire ; un appel qui la réduit sous le nombre déjà enregistré émet un warning (les entrées existantes restent).
+- **Ajout / suppression à chaud** : `registerTool()` / `unregisterTool()` et `registerResource()` / `unregisterResource(uri)` sont utilisables **après `begin()`**, en désignant l'entrée **par son nom**. `unregisterResource(uri)` est nouveau.
+- **`addToolParam` par nom** : surcharge `addToolParam(toolName, name, description, type, required)` (5 arguments obligatoires) pour cibler un outil **nommé** ; l'ancienne signature `addToolParam(name, description, type, required)` (dernier outil) est conservée.
+- **Sécurité à chaud** : le callback est **copié localement** avant son invocation (`_handleToolsCall`) — modifier le catalogue depuis un callback (ajout/retrait d'outil) ne détruit plus le `std::function` en cours d'exécution.
 
 ---
 
@@ -140,7 +147,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git@^1.3.2
+    https://github.com/Fo170/Server_MCP.git@^1.4.0
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
@@ -161,7 +168,7 @@ La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServ
 
 ```cpp
 // Créer l'instance du serveur MCP
-Server_MCP mcp("MonServeur", "1.3.2");
+Server_MCP mcp("MonServeur", "1.4.0");
 
 // Callback pour un outil
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
@@ -197,7 +204,7 @@ void loop() {
 
 ```cpp
 Server_MCP(const String& serverName = "Server-MCP",
-           const String& serverVersion = "1.3.2",
+           const String& serverVersion = "1.4.0",
            uint16_t maxTools = 16,
            uint16_t maxResources = 8);
 ```
@@ -205,9 +212,9 @@ Server_MCP(const String& serverName = "Server-MCP",
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `serverName` | `String` | `"Server-MCP"` | Nom du serveur affiché au client |
-| `serverVersion` | `String` | `"1.3.2"` | Version du serveur |
-| `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils |
-| `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources |
+| `serverVersion` | `String` | `"1.4.0"` | Version du serveur |
+| `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils (modifiable à l'exécution via `setMaxTools()`) |
+| `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources (modifiable via `setMaxResources()`) |
 
 ### Configuration
 
@@ -226,10 +233,22 @@ mcp.setSerialDebug(true, &Serial);  // Activer
 mcp.setSerialDebug(false);          // Désactiver
 ```
 
+#### `setMaxTools(maxTools)` / `setMaxResources(maxResources)` — v1.4.0
+Ajustent la capacité allouée **à l'exécution** (le plafond n'est plus figé au constructeur). Appelables avant ou après `begin()`. `0` = aucune entrée autorisée. En cas d'augmentation, la mémoire est réservée (`reserve`) ; en cas de réduction sous le nombre déjà enregistré, un warning est émis mais les entrées existantes sont conservées (seuls les nouveaux ajouts sont refusés).
+
+```cpp
+mcp.setMaxTools(40);        // jusqu'à 40 outils
+mcp.setMaxResources(16);    // jusqu'à 16 ressources
+uint16_t n = mcp.maxTools();       // lecture
+uint16_t r = mcp.maxResources();   // lecture
+```
+
+> Astuce : passer directement par le constructeur (`Server_MCP mcp("Nom", "1.4.0", 40, 16);`) évite une réallocation ultérieure.
+
 ### Enregistrement des outils
 
 #### `registerTool(name, description, callback, poids)`
-Enregistre un nouvel outil accessible par le LLM.
+Enregistre un nouvel outil accessible par le LLM. Depuis la v1.4.0, peut être appelé **à chaud**, après `begin()`, pour enrichir dynamiquement le catalogue (l'outil apparaît immédiatement dans `tools/list`).
 
 ```cpp
 mcp.registerTool("temperature", "Lit la température du capteur", cb_temperature);
@@ -243,8 +262,15 @@ mcp.registerTool("historique", "Historique complet (coûteux)", cb_historique, 3
 std::vector<MCPContent> maFonction(const JsonObject& params);
 ```
 
+#### `addToolParam(toolName, name, description, type, required)` — v1.4.0
+Ajoute un paramètre à un outil **désigné par son nom** (5 arguments obligatoires).
+
+```cpp
+mcp.addToolParam("regler_chauffage", "temperature", "Température cible en °C", "integer", true);
+```
+
 #### `addToolParam(name, description, type, required)`
-Ajoute un paramètre au **dernier outil enregistré**.
+Ancienne signature : ajoute un paramètre au **dernier outil enregistré**.
 
 ```cpp
 mcp.registerTool("regler_chauffage", "Règle la température", cb_chauffage);
@@ -255,7 +281,7 @@ mcp.addToolParam("mode", "Mode: eco, confort, boost", "string", false);
 **Types supportés :** `"string"`, `"number"`, `"integer"`, `"boolean"`, `"array"`, `"object"` — la validation est stricte (v1.3.2) : `integer` exige un entier JSON (`1.5` est rejeté), `number` accepte entier/flottant, `array`/`object` sont vérifiés selon leur type JSON.
 
 #### `unregisterTool(name)`
-Supprime un outil.
+Supprime un outil **par son nom**. Depuis la v1.4.0, utilisable **à chaud** (après `begin()`).
 
 ```cpp
 mcp.unregisterTool("led_on");
@@ -264,10 +290,17 @@ mcp.unregisterTool("led_on");
 ### Enregistrement des ressources
 
 #### `registerResource(uri, name, description, mimeType)`
-Enregistre une ressource accessible en lecture.
+Enregistre une ressource accessible en lecture. Utilisable **à chaud** (v1.4.0).
 
 ```cpp
 mcp.registerResource("sensor://temperature", "Température", "Valeur actuelle", "text/plain");
+```
+
+#### `unregisterResource(uri)` — v1.4.0
+Supprime une ressource **par son URI**.
+
+```cpp
+mcp.unregisterResource("sensor://temperature");
 ```
 
 ### Démarrage et gestion
@@ -362,7 +395,7 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.3.2");
+Server_MCP mcp("ESP-LED", "1.4.0");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -448,7 +481,7 @@ void setup() {
 #endif
 
 SERVER_WEB webServer(80);    // Interface utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.3.2");  // Port 8081 par défaut
+Server_MCP mcpServer("ESP-MCP", "1.4.0");  // Port 8081 par défaut
 
 void handleWebRoot() {
     webServer.send(200, "text/html", "<h1>Dashboard ESP8266</h1>");
@@ -608,8 +641,9 @@ curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json" 
 | Protocole | JSON-RPC 2.0 |
 | Transport | HTTP POST |
 | Port par défaut | 8081 |
-| Max outils | 16 (configurable) |
-| Max ressources | 8 (configurable) |
+| Max outils | 16 par défaut, programmable à l'exécution (`setMaxTools()`, `0` = aucun) |
+| Max ressources | 8 par défaut, programmable à l'exécution (`setMaxResources()`, `0` = aucune) |
+| Catalogue | dynamique : ajout/suppression à chaud par nom (`registerTool` / `unregisterTool` / `registerResource` / `unregisterResource`) |
 | RAM requise | ~15 Ko |
 | Dépendances | ArduinoJson 7.x |
 
@@ -624,6 +658,12 @@ curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.4.0 — 20/09/2026
+- **Capacité dynamique** : `setMaxTools(n)` / `setMaxResources(n)` rendent le plafond **programmable à l'exécution** (le constructeur conserve `16` / `8` par défaut ; `0` = aucune entrée autorisée). `reserve()` à l'augmentation, warning si la réduction passe sous le nombre déjà enregistré (entrées conservées). Accesseurs `maxTools()` / `maxResources()`.
+- **Ajout / suppression à chaud** : `registerTool()` / `unregisterTool()` et `registerResource()` / `unregisterResource(uri)` sont utilisables **après `begin()`**, en désignant l'entrée **par son nom**. `unregisterResource(uri)` est nouveau (symétrie avec `unregisterTool`).
+- **`addToolParam` par nom** : nouvelle surcharge `addToolParam(toolName, name, description, type, required)` (5 arguments obligatoires) ciblant un outil nommé ; l'ancienne signature (dernier outil) est conservée.
+- **Sécurité à chaud** : copie locale du callback dans `_handleToolsCall` avant invocation — modifier le catalogue depuis un callback ne détruit plus le `std::function` en cours.
 
 ### v1.3.2 — 03/09/2026
 - **Écho exact de l'`id` JSON-RPC** : les handlers propagent `JsonVariant` au lieu d'un `uint32_t` → les ids `string`, négatifs ou > 2³² sont fidèlement renvoyés ; erreur de parse/version → `"id": null`.

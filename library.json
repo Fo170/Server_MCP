@@ -1,6 +1,6 @@
 {
   "name": "Server_MCP",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "MCP (Model Context Protocol) server for ESP8266/ESP32 — JSON-RPC 2.0 over HTTP",
   "keywords": [
     "mcp",

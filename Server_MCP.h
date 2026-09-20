@@ -1,5 +1,5 @@
 // ============================================================================
-// Server_MCP.h - version 1.3.2
+// Server_MCP.h - version 1.4.0
 // Bibliotheque C++ MCP pour ESP8266/ESP32 — Port configurable
 // ============================================================================
 
@@ -108,7 +108,7 @@ static inline String _mcpIdToStr(const JsonVariant& id) {
 class Server_MCP {
 public:
     Server_MCP(const String& serverName = "Server-MCP",
-               const String& serverVersion = "1.3.2",
+               const String& serverVersion = "1.4.0",
                uint16_t maxTools = 16,
                uint16_t maxResources = 8);
     ~Server_MCP();
@@ -116,10 +116,28 @@ public:
     void setServerInfo(const String& name, const String& version);
     void setSerialDebug(bool enable, HardwareSerial* serial = &Serial);
 
+    // Capacité dynamique (v1.4.0) : le plafond n'est plus figé au constructeur.
+    // 0 = aucun outil/ressource autorisé. Peut être appelé à tout moment
+    // (avant ou après begin()) ; reserve() si on augmente, warning si on
+    // descend sous le nombre déjà enregistré.
+    void setMaxTools(uint16_t maxTools);
+    void setMaxResources(uint16_t maxResources);
+    uint16_t maxTools() const;
+    uint16_t maxResources() const;
+
+    // Enregistrement/suppression d'outils (v1.4.0 : utilisables À CHAUD, après
+    // begin(), en désignant l'outil par son nom).
     bool registerTool(const String& name,
                       const String& description,
                       MCPToolCallback callback,
                       uint8_t poids = 1);
+    // Surcharge par NOM d'outil (v1.4.0) : 5 arguments obligatoires pour lever
+    // toute ambiguïté avec la signature « dernier outil enregistré » ci-dessous.
+    bool addToolParam(const String& toolName,
+                      const String& name,
+                      const String& description,
+                      const String& type,
+                      bool required);
     bool addToolParam(const String& name,
                       const String& description,
                       const String& type = "string",
@@ -130,6 +148,7 @@ public:
                           const String& name,
                           const String& description,
                           const String& mimeType = "text/plain");
+    bool unregisterResource(const String& uri);
 
     // ═════════════════════════════════════════════════════════════════
     // DEMARRAGE AVEC PORT PERSONNALISE
@@ -268,6 +287,43 @@ inline void Server_MCP::setSerialDebug(bool enable, HardwareSerial* serial) {
     _debugSerial = serial;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Capacité dynamique (v1.4.0) — le plafond d'outils/ressources est
+// programmable à l'exécution (pas seulement au constructeur).
+// ─────────────────────────────────────────────────────────────────────────
+inline void Server_MCP::setMaxTools(uint16_t maxTools) {
+    _maxTools = maxTools;
+    if (maxTools > _tools.capacity()) {
+        _tools.reserve(maxTools);
+    }
+    if (maxTools < _tools.size()) {
+        _logError("setMaxTools(" + String(maxTools) + ") < " + String(_tools.size()) +
+                  " outils deja enregistres : les nouveaux ajouts seront refuses.");
+    }
+    _log("Max outils = " + String(_maxTools));
+}
+
+inline void Server_MCP::setMaxResources(uint16_t maxResources) {
+    _maxResources = maxResources;
+    if (maxResources > _resources.capacity()) {
+        _resources.reserve(maxResources);
+    }
+    if (maxResources < _resources.size()) {
+        _logError("setMaxResources(" + String(maxResources) + ") < " +
+                  String(_resources.size()) +
+                  " ressources deja enregistrees : les nouveaux ajouts seront refuses.");
+    }
+    _log("Max ressources = " + String(_maxResources));
+}
+
+inline uint16_t Server_MCP::maxTools() const {
+    return _maxTools;
+}
+
+inline uint16_t Server_MCP::maxResources() const {
+    return _maxResources;
+}
+
 inline bool Server_MCP::registerTool(const String& name,
                                       const String& description,
                                       MCPToolCallback callback,
@@ -291,6 +347,25 @@ inline bool Server_MCP::registerTool(const String& name,
     }
     _tools.push_back(entry);
     _log("Outil enregistre: " + name + " (poids " + String(entry.poids) + ")");
+    return true;
+}
+
+inline bool Server_MCP::addToolParam(const String& toolName,
+                                      const String& name,
+                                      const String& description,
+                                      const String& type,
+                                      bool required) {
+    int idx = _findToolIndex(toolName);
+    if (idx < 0) {
+        _logError("addToolParam: outil introuvable: " + toolName);
+        return false;
+    }
+    MCPParam param;
+    param.name = name;
+    param.description = description;
+    param.type = type;
+    param.required = required;
+    _tools[idx].definition.params.push_back(param);
     return true;
 }
 
@@ -335,6 +410,17 @@ inline bool Server_MCP::registerResource(const String& uri,
     _resources.push_back(entry);
     _log("Ressource enregistree: " + uri);
     return true;
+}
+
+inline bool Server_MCP::unregisterResource(const String& uri) {
+    for (size_t i = 0; i < _resources.size(); i++) {
+        if (_resources[i].uri == uri) {
+            _resources.erase(_resources.begin() + i);
+            _log("Ressource supprimee: " + uri);
+            return true;
+        }
+    }
+    return false;
 }
 
 inline bool Server_MCP::begin(uint16_t port) {
@@ -730,7 +816,11 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, const JsonVar
     }
 
     _log("Appel outil: " + toolName);
-    std::vector<MCPContent> contents = _tools[idx].callback(arguments);
+    // v1.4.0 : copie locale du callback AVANT l'appel — le catalogue pouvant
+    // être modifié À CHAUD (registerTool/unregisterTool depuis le callback),
+    // une réallocation de _tools ne doit pas détruire le std::function en cours.
+    MCPToolCallback callback = _tools[idx].callback;
+    std::vector<MCPContent> contents = callback(arguments);
 
     // Réponse construite dans UN SEUL JsonDocument (29/08/2026, v1.2.0 ;
     // pas de _sendResult → deep-copy du result dans un 2ᵉ doc).
