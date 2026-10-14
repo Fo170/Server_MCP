@@ -1,5 +1,5 @@
 // ============================================================================
-// Server_MCP.h - version 1.4.0
+// Server_MCP.h - version 1.5.0
 // Bibliotheque C++ MCP pour ESP8266/ESP32 — Port configurable
 // ============================================================================
 
@@ -10,6 +10,7 @@
 #include <ArduinoJson.h>
 #include <vector>
 #include <functional>
+#include <utility>
 #include <map>
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -32,6 +33,38 @@
 #endif
 
 #define MCP_PROTOCOL_VERSION "2024-11-05"
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sortie MCP « streamée » : sérialise un JSON ArduinoJson directement vers le
+// serveur web par blocs, SANS construire de String (mémoire O(1)). Indispensable
+// sur ESP8266 à heap faible : l'ancienne version allouait une `String output` et
+// échouait par intermittence (réponses vides → serveur MCP non détecté).
+// ────────────────────────────────────────────────────────────────────────────
+class MCPChunkPrint : public Print {
+public:
+  explicit MCPChunkPrint(SERVER_MCP_WEBSERVER* srv) : _srv(srv) {}
+  size_t write(uint8_t c) override {
+    _buf[_len++] = (char)c;
+    if (_len >= sizeof(_buf)) flushBuf();
+    return 1;
+  }
+  size_t write(const uint8_t* data, size_t n) override {
+    size_t i = 0;
+    while (i < n) {
+      size_t space = sizeof(_buf) - _len;
+      size_t chunk = (n - i < space) ? (n - i) : space;
+      memcpy(_buf + _len, data + i, chunk);
+      _len += chunk; i += chunk;
+      if (_len >= sizeof(_buf)) flushBuf();
+    }
+    return n;
+  }
+  void flushBuf() { if (_len && _srv) { _srv->sendContent(_buf, _len); _len = 0; } }
+private:
+  SERVER_MCP_WEBSERVER* _srv;
+  char   _buf[256];
+  size_t _len = 0;
+};
 
 #define MCP_MAX_BODY        8192        // v1.3.2 : taille max d'une requête JSON-RPC (anti-OOM sur heap serré)
 
@@ -108,7 +141,7 @@ static inline String _mcpIdToStr(const JsonVariant& id) {
 class Server_MCP {
 public:
     Server_MCP(const String& serverName = "Server-MCP",
-               const String& serverVersion = "1.4.0",
+               const String& serverVersion = "1.5.0",
                uint16_t maxTools = 16,
                uint16_t maxResources = 8);
     ~Server_MCP();
@@ -165,6 +198,9 @@ public:
     void setFlowControl(uint16_t maxRequests, uint32_t windowMs);
     // v1.3.0 : backpressure mémoire (XON/XOFF) — callback "pression" (ex. heap bas).
     void setFlowPression(bool (*cb)(), uint16_t maxSousPression = MCP_FLOW_MAX_SOUS_PRESSION);
+
+    // v1.5.0 : ms du traitement de la dernière requête MCP (0 = jamais).
+    unsigned long lastActivityMs() const { return _lastActivity; }
     uint16_t flowMax() const;
     uint16_t flowMaxEffectif() const;   // v1.3.0 : max courant (pression ? réduit : normal)
     uint16_t flowUsed() const;
@@ -174,6 +210,9 @@ public:
     String flowEtat() const;
 
     static MCPContent makeTextContent(const String& text);
+    // v1.5.0 : variante par DÉPLACEMENT — évite de recopier un gros texte
+    // (get_graph_1h...) une seconde fois en RAM sur les cartes à heap faible.
+    static MCPContent makeTextContent(String&& text);
     static MCPContent makeImageContent(const String& base64Data, const String& mimeType = "image/png");
     static MCPContent makeResourceContent(const String& uri, const String& text, const String& mimeType = "text/plain");
 
@@ -186,6 +225,8 @@ private:
 
     SERVER_MCP_WEBSERVER* _server;
     uint16_t _port;
+
+    unsigned long _lastActivity = 0;              // v1.5.0 : ms de la dernière requête
 
     struct ToolEntry {
         MCPTool definition;
@@ -241,6 +282,9 @@ private:
     bool _validateParams(const JsonObject& params, const MCPTool& tool, String& errorMsg);
     void _buildToolSchema(const MCPTool& tool, JsonObject& schema);
     void _serializeContents(const std::vector<MCPContent>& contents, JsonArray& array);
+    // v1.5.0 : écrit une String JSON échappée en streaming (sans allouer
+    // de copie du texte) — évite le OOM des grosses réponses sur ESP8266.
+    void _streamJSONString(const String& s, size_t chunk = 256);
 };
 
 // ============================================================================
@@ -595,6 +639,13 @@ inline MCPContent Server_MCP::makeTextContent(const String& text) {
     return c;
 }
 
+inline MCPContent Server_MCP::makeTextContent(String&& text) {
+    MCPContent c;
+    c.type = MCP_CONTENT_TEXT;
+    c.text = std::move(text);
+    return c;
+}
+
 inline MCPContent Server_MCP::makeImageContent(const String& base64Data, const String& mimeType) {
     MCPContent c;
     c.type = MCP_CONTENT_IMAGE;
@@ -662,6 +713,7 @@ inline void Server_MCP::_handleNotFound() {
 }
 
 inline void Server_MCP::_processJSONRPC(const String& body) {
+    _lastActivity = millis();   // horodatage pour la logique de scan WiFi (cf. setScanGate)
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, body);
     if (error) {
@@ -731,23 +783,61 @@ inline void Server_MCP::_handleInitialize(const JsonObject& params, const JsonVa
 }
 
 inline void Server_MCP::_handleToolsList(const JsonVariant& id) {
-    // Réponse construite dans UN SEUL JsonDocument (29/08/2026, v1.2.0 —
-    // comme _handleToolsCall) : l'ancien _sendResult deep-copait le result dans
-    // un 2ᵉ doc → pic ~2× la taille (tools/list ≈ 2 Ko) → OOM sur ESP8266.
-    JsonDocument doc;
-    JsonObject response = doc.to<JsonObject>();
-    response["jsonrpc"] = "2.0";
-    response["id"] = id;
-    JsonObject result = response["result"].to<JsonObject>();
-    JsonArray tools = result["tools"].to<JsonArray>();
+    // v1.5.0 : réponse STREAMÉE outil par outil. L'ancienne version
+    // construisait un JsonDocument contenant TOUS les outils puis un String de
+    // sortie → pic mémoire ~5-6 Ko → OOM/plantage sur ESP8266 (heap faible,
+    // appelé par tout client MCP au démarrage). On émet directement chaque outil.
+    if (_suppressResponse) return;
+    _server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    _server->send(200, "application/json");
+    MCPChunkPrint out(_server);
+    out.print(F("{\"jsonrpc\":\"2.0\",\"id\":"));
+    out.print(_mcpIdToStr(id));
+    out.print(F(",\"result\":{\"tools\":["));
+    bool first = true;
     for (const auto& entry : _tools) {
-        JsonObject toolObj = tools.add<JsonObject>();
+        if (!first) out.print(',');
+        first = false;
+        JsonDocument d;              // un seul outil : quelques centaines d'octets
+        JsonObject toolObj = d.to<JsonObject>();
         toolObj["name"] = entry.definition.name;
         toolObj["description"] = entry.definition.description;
         JsonObject inputSchema = toolObj["inputSchema"].to<JsonObject>();
         _buildToolSchema(entry.definition, inputSchema);
+        serializeJson(toolObj, out);   // sérialisation DIRECTE, sans String
     }
-    _sendJSONResponse(response);
+    out.print(F("]}}\n"));
+    out.flushBuf();
+    _server->sendContent("");
+}
+
+// Écrit `s` comme chaîne JSON (guillemets internes échappés) directement dans
+// le socket, en petits morceaux — aucune copie globale du texte en RAM.
+inline void Server_MCP::_streamJSONString(const String& s, size_t chunk) {
+    if (chunk < 16) chunk = 16;
+    char buf[64];
+    size_t o = 0;
+    auto flush = [&]() { if (o) { _server->sendContent(buf, o); o = 0; } };
+    const size_t n = s.length();
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        const char* esc = nullptr;
+        char uni[8];
+        switch (c) {
+            case '"':  esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\n': esc = "\\n";  break;
+            case '\r': esc = "\\r";  break;
+            case '\t': esc = "\\t";  break;
+            default:
+                if (c < 0x20) { snprintf(uni, sizeof(uni), "\\u%04x", c); esc = uni; }
+                break;
+        }
+        if (esc) { for (const char* p = esc; *p; p++) buf[o++] = *p; }
+        else     { buf[o++] = (char)c; }
+        if (o >= sizeof(buf) - 8) flush();
+    }
+    flush();
 }
 
 inline void Server_MCP::_handleToolsCall(const JsonObject& params, const JsonVariant& id) {
@@ -822,7 +912,34 @@ inline void Server_MCP::_handleToolsCall(const JsonObject& params, const JsonVar
     MCPToolCallback callback = _tools[idx].callback;
     std::vector<MCPContent> contents = callback(arguments);
 
-    // Réponse construite dans UN SEUL JsonDocument (29/08/2026, v1.2.0 ;
+    // v1.5.0 : réponse TEXTUELLE streamée (cas courant) — on n'alloue ni
+    // JsonDocument ni String de sortie, donc la mémoire requise ne dépend plus de
+    // la taille du texte (get_config, get_graph_1h...). Les contenus non textuels
+    // (image/ressource) passent par le chemin JsonDocument d'origine.
+    bool allText = !contents.empty();
+    for (const auto& c : contents) if (c.type != MCP_CONTENT_TEXT) { allText = false; break; }
+
+    if (allText && !_suppressResponse) {
+        _server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _server->send(200, "application/json");
+        _server->sendContent("{\"jsonrpc\":\"2.0\",\"id\":");
+        _server->sendContent(_mcpIdToStr(id));
+        _server->sendContent(",\"result\":{\"content\":[");
+        for (size_t k = 0; k < contents.size(); k++) {
+            if (k) _server->sendContent(",");
+            _server->sendContent("{\"type\":\"text\",\"text\":\"");
+            _streamJSONString(contents[k].text);
+            _server->sendContent("\"}");
+        }
+        _server->sendContent("],\"isError\":false}}\n");
+        _server->sendContent("");
+        contents.clear();
+        contents.shrink_to_fit();
+        _log("Outil " + toolName + " execute avec succes");
+        return;
+    }
+
+    // Réponse construite dans UN SEUL JsonDocument (cas image/ressource).
     // pas de _sendResult → deep-copy du result dans un 2ᵉ doc).
     // L'ancien chemin gardait contents (gros String de log) + finalDoc + doc
     // + output → pic ~3× la taille du texte. Sur ESP8266 (heap ~6-7 Ko), les
@@ -935,26 +1052,17 @@ inline void Server_MCP::_sendJSONResponse(const JsonObject& response, uint16_t s
     // v1.3.2 : notification — la méthode a été exécutée mais AUCUNE réponse
     // JSON-RPC ne doit partir (le HTTP 202 vide est envoyé par _processJSONRPC).
     if (_suppressResponse) return;
-    String output;
-    serializeJson(response, output);
-    _log("Reponse: " + output.substring(0, 256));
-    // WebServer::send(200, type, content) écrit TOUT le corps (28/08/2026, v1.1.2)
-    // en UN SEUL write() → tronqué au-delà du buffer TCP ESP32
-    // (CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760 o) : tools/list (~8 Ko) était coupé
-    // à 5760 o et le client MCP (LM Studio) ne voyait pas les outils.
-    // setContentLength() fixe le Content-Length puis on streame par CHUNKS ≤ 1024 o.
-    // statusCode paramétrable (200 par défaut, 429 pour le rate-limiting).
-    const size_t CHUNK = 1024;
-    _server->setContentLength(output.length());
-    _server->send(statusCode, "application/json");   // headers seuls (Content-Length total)
-    const char* p = output.c_str();
-    size_t len = output.length();
-    while (len > 0) {
-        size_t n = (len > CHUNK) ? CHUNK : len;
-        _server->sendContent(p, n);
-        p += n;
-        len -= n;
-    }
+    // v1.5.0 : sérialisation STREAMÉE (MCPChunkPrint) — plus de `String
+    // output`. measureJson() donne la taille sans allouer ; le corps est émis
+    // par blocs de 256 o. Rend initialize/ping/erreurs insensibles au heap.
+    size_t len = measureJson(response);
+    _server->setContentLength(len);
+    _server->send(statusCode, "application/json");
+    MCPChunkPrint out(_server);
+    serializeJson(response, out);
+    out.flushBuf();
+    if (_debugEnabled && _debugSerial)
+        _log("Reponse JSON " + String((unsigned)len) + " o");
 }
 
 inline void Server_MCP::_log(const String& msg) {

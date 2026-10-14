@@ -4,7 +4,7 @@ Bibliothèque C++ pour **ESP8266 / ESP32** implémentant le **Model Context Prot
 
 > **Auteur** : Olivier Fournet  
 > **Licence** : GPL-3.0  
-> **Version** : 1.4.0  
+> **Version** : 1.5.0  
 > **Compatibilité** : ESP8266 (NodeMCU, Wemos D1, etc.) et ESP32 (DevKit, Wemos D1 Mini ESP32, etc.) sous PlatformIO / Arduino Framework
 
 ---
@@ -26,12 +26,13 @@ Depuis la v1.1.2, la bibliothèque intègre une série de correctifs d'évolutio
 | **v1.3.1** | **01/09/2026** | **Rejet 429 à 2 messages distincts** | (a) `poids > maxEff` → « outil trop lourd (poids N) pour l'état de flux actuel » (cas structurel, ex. poids 3 quand le XOFF force max=2 — corrige le trompeur « canaux 0/2 ») ; (b) sinon « canaux X/M (saturé)… retry ~Y s » (rafale) |
 | **v1.3.2** | **03/09/2026** | **Robustesse & interop** | Écho **exact** de l'`id` JSON-RPC (string / négatif / > 2³²) ; notifications **exécutées** puis HTTP 202 (spec) ; validation de type **stricte v7** (`integer` = `JsonInteger`, `array`/`object` vérifiés) ; flux : **refus sans altérer la fenêtre**, `Retry-After` 2 s sur rejet structurel + message selon la cause ; garde `poids > flowMax` ; plafond body `MCP_MAX_BODY` (HTTP 413) ; `defaultValue` retiré de `addToolParam` |
 | **v1.4.0** | **20/09/2026** | **Catalogue MCP dynamique** | `setMaxTools()` / `setMaxResources()` rendent la capacité **programmable à l'exécution** (plus figée au constructeur ; `0` = aucun) ; `registerTool()` / `unregisterTool()` / `registerResource()` / `unregisterResource()` utilisables **à chaud** après `begin()`, en désignant l'entrée **par son nom** ; surcharge `addToolParam(toolName, …)` pour cibler un outil nommé ; copie locale du callback avant appel (modification du catalogue depuis un callback sûre) |
+| **v1.5.0** | **14/10/2026** | **Réponses STREAMÉES (anti-OOM)** | Sérialisation JSON **directement vers le socket** par blocs (classe `MCPChunkPrint` + `measureJson()`) : plus de `String output` ni de `JsonDocument` global pour `initialize` / `ping` / erreurs, `tools/list` (**outil par outil**) et `tools/call` texte → mémoire **O(1)**, indépendante de la taille de la réponse ; `makeTextContent(String&&)` par **déplacement** ; accesseur `lastActivityMs()` |
 
 **Pourquoi les correctifs du 29/08 ?** L'ancien chemin construisait `finalDoc` + un 2ᵉ document dans `_sendResult()` (`response["result"] = result` = deep-copy) + la `String` de sortie, tout en gardant les `std::vector<MCPContent>` vivants → pic ≈ **3× la taille du texte**. Sur ESP8266 avec heap ~6-7 Ko (coulo entre MCP + web + SerialWeb), toute réponse log > ~600 o saturait → connexion coupée / `content: []`. Le correctif construit la réponse entière dans **un seul document** et libère `contents` avant l'envoi → pic ≈ **1,5× le texte**.
 
 ---
 
-## 🆕 Nouveautés (v1.1.2 → v1.4.0)
+## 🆕 Nouveautés (v1.1.2 → v1.5.0)
 
 Récapitulatif chronologique des évolutions — rôle et détail de chaque correctif dans le tableau [ci-dessus](#correctifs-majeurs-intégrés) et dans le [Changelog](#changelog).
 
@@ -67,6 +68,13 @@ Récapitulatif chronologique des évolutions — rôle et détail de chaque corr
 - **Ajout / suppression à chaud** : `registerTool()` / `unregisterTool()` et `registerResource()` / `unregisterResource(uri)` sont utilisables **après `begin()`**, en désignant l'entrée **par son nom**. `unregisterResource(uri)` est nouveau.
 - **`addToolParam` par nom** : surcharge `addToolParam(toolName, name, description, type, required)` (5 arguments obligatoires) pour cibler un outil **nommé** ; l'ancienne signature `addToolParam(name, description, type, required)` (dernier outil) est conservée.
 - **Sécurité à chaud** : le callback est **copié localement** avant son invocation (`_handleToolsCall`) — modifier le catalogue depuis un callback (ajout/retrait d'outil) ne détruit plus le `std::function` en cours d'exécution.
+
+### v1.5.0 — réponses streamées (anti-OOM)
+- **Sérialisation en streaming** : une classe `Print` (`MCPChunkPrint`) émet le JSON **directement dans le socket** par blocs de 256 o (`measureJson()` donne la taille sans allouer). Plus de `String output`, plus de `JsonDocument` contenant *tous* les outils → la mémoire requise est **O(1)**, indépendante de la taille de la réponse.
+- **`tools/list` outil par outil** : chaque outil est sérialisé dans un petit document puis émis ; fini l'OOM/plantage quand tout client MCP appelle `tools/list` au démarrage sur heap faible.
+- **`tools/call` texte streamé** : le cas courant (contenu texte, ex. `get_graph_1h`) n'alloue ni `JsonDocument` ni `String` de sortie ; les contenus non textuels (image/ressource) gardent le chemin `JsonDocument`.
+- **`initialize` / `ping` / erreurs** : réponse également streamée → insensible à la fragmentation du heap.
+- **API** : `makeTextContent(String&&)` (variante par **déplacement**, évite une recopie) ; `lastActivityMs()` renvoie l'horodatage (ms, `0` = jamais) de la dernière requête traitée.
 
 ---
 
@@ -147,7 +155,7 @@ framework = arduino
 monitor_speed = 115200
 
 lib_deps =
-    https://github.com/Fo170/Server_MCP.git@^1.4.0
+    https://github.com/Fo170/Server_MCP.git@^1.5.0
 
 board_build.ldscript = eagle.flash.4m2m.ld
 upload_speed = 921600
@@ -168,7 +176,7 @@ La classe serveur HTTP est choisie automatiquement selon la plateforme (`WebServ
 
 ```cpp
 // Créer l'instance du serveur MCP
-Server_MCP mcp("MonServeur", "1.4.0");
+Server_MCP mcp("MonServeur", "1.5.0");
 
 // Callback pour un outil
 std::vector<MCPContent> allumerLED(const JsonObject& params) {
@@ -204,7 +212,7 @@ void loop() {
 
 ```cpp
 Server_MCP(const String& serverName = "Server-MCP",
-           const String& serverVersion = "1.4.0",
+           const String& serverVersion = "1.5.0",
            uint16_t maxTools = 16,
            uint16_t maxResources = 8);
 ```
@@ -212,7 +220,7 @@ Server_MCP(const String& serverName = "Server-MCP",
 | Paramètre | Type | Défaut | Description |
 |-----------|------|--------|-------------|
 | `serverName` | `String` | `"Server-MCP"` | Nom du serveur affiché au client |
-| `serverVersion` | `String` | `"1.4.0"` | Version du serveur |
+| `serverVersion` | `String` | `"1.5.0"` | Version du serveur |
 | `maxTools` | `uint16_t` | `16` | Nombre maximum d'outils (modifiable à l'exécution via `setMaxTools()`) |
 | `maxResources` | `uint16_t` | `8` | Nombre maximum de ressources (modifiable via `setMaxResources()`) |
 
@@ -243,7 +251,7 @@ uint16_t n = mcp.maxTools();       // lecture
 uint16_t r = mcp.maxResources();   // lecture
 ```
 
-> Astuce : passer directement par le constructeur (`Server_MCP mcp("Nom", "1.4.0", 40, 16);`) évite une réallocation ultérieure.
+> Astuce : passer directement par le constructeur (`Server_MCP mcp("Nom", "1.5.0", 40, 16);`) évite une réallocation ultérieure.
 
 ### Enregistrement des outils
 
@@ -395,7 +403,7 @@ return { Server_MCP::makeResourceContent("doc://aide", "Contenu...", "text/markd
 const char* WIFI_SSID = "MonWifi";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
-Server_MCP mcp("ESP-LED", "1.4.0");
+Server_MCP mcp("ESP-LED", "1.5.0");
 
 std::vector<MCPContent> ledOn(const JsonObject& params) {
     digitalWrite(PIN_LED, HIGH);
@@ -481,7 +489,7 @@ void setup() {
 #endif
 
 SERVER_WEB webServer(80);    // Interface utilisateur
-Server_MCP mcpServer("ESP-MCP", "1.4.0");  // Port 8081 par défaut
+Server_MCP mcpServer("ESP-MCP", "1.5.0");  // Port 8081 par défaut
 
 void handleWebRoot() {
     webServer.send(200, "text/html", "<h1>Dashboard ESP8266</h1>");
@@ -658,6 +666,12 @@ curl -X POST http://192.168.1.XX:8081/mcp   -H "Content-Type: application/json" 
 ---
 
 ## 📝 Changelog
+
+### v1.5.0 — 14/10/2026
+- **Sérialisation JSON en streaming** : nouvelle classe `Print` `MCPChunkPrint` émettant le corps **directement vers le socket** par blocs de 256 o ; `measureJson()` fournit la taille sans allouer. `_sendJSONResponse` n'alloue plus de `String output` → `initialize` / `ping` / erreurs insensibles au heap.
+- **`tools/list` streamé outil par outil** : plus de `JsonDocument` contenant tous les outils (pic ~5-6 Ko) → corrige l'**OOM/plantage ESP8266** quand un client MCP appelle `tools/list` au démarrage sur heap faible.
+- **`tools/call` texte streamé** : `_streamJSONString()` échappe et émet le texte JSON par morceaux sans copie globale ; les contenus non textuels (image/ressource) conservent le chemin `JsonDocument`.
+- **API** : `makeTextContent(String&&)` — variante par **déplacement** (évite une seconde recopie d'un gros texte) ; `lastActivityMs()` — horodatage (ms, `0` = jamais) de la dernière requête MCP traitée.
 
 ### v1.4.0 — 20/09/2026
 - **Capacité dynamique** : `setMaxTools(n)` / `setMaxResources(n)` rendent le plafond **programmable à l'exécution** (le constructeur conserve `16` / `8` par défaut ; `0` = aucune entrée autorisée). `reserve()` à l'augmentation, warning si la réduction passe sous le nombre déjà enregistré (entrées conservées). Accesseurs `maxTools()` / `maxResources()`.
