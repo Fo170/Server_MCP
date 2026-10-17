@@ -8,7 +8,7 @@
 
 
 // Version de la librairie (source UNIQUE — agrégée par liste_lib.h)
-#define __SERVER_MCP_H_VERSION__ "1.5.0"
+#define __SERVER_MCP_H_VERSION__ "1.5.1"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <vector>
