@@ -6,6 +6,9 @@
 #ifndef SERVER_MCP_H
 #define SERVER_MCP_H
 
+
+// Version de la librairie (source UNIQUE — agrégée par liste_lib.h)
+#define __SERVER_MCP_H_VERSION__ "1.5.0"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <vector>
